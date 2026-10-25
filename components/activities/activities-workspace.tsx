@@ -1,155 +1,326 @@
 'use client'
 
 import { useState } from 'react'
-import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
+import { Plus } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
-import { useStore } from '@/lib/store'
-import { empById, type ActivityStatus } from '@/lib/fixtures'
-import { Callout, IdChip, KV, Panel, PersonLink, StatusPill } from '@/components/hub/primitives'
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { useHub } from '@/lib/store'
+import { TODAY, type Activity, type ActivityStatus } from '@/lib/fixtures'
+import { canSeeActivity, dueOf, empOf, isOpen, isOverdue, originOf } from '@/lib/derive'
 import { ActivityTable, DueCell } from './activity-table'
+import { Callout, IdChip, KV, Panel, PersonLink, StatusPill } from '@/components/hub/primitives'
+import { Field, FormSheet, Select, TabBar, TextArea, TextInput, required, useDeptOptions, useForm, useParam, usePeopleOptions, useProductOptions, useProjectOptions } from '@/components/hub/form'
+import { StateBlock } from '@/components/hub/page'
 
-const filters: { id: string; label: string; test: (s: ActivityStatus) => boolean }[] = [
-  { id: 'all', label: 'All', test: () => true },
-  { id: 'open', label: 'Open', test: (s) => ['Not started', 'In progress', 'Blocked', 'Reopened'].includes(s) },
-  { id: 'review', label: 'Awaiting review', test: (s) => s === 'Submitted' },
-  { id: 'done', label: 'Accepted', test: (s) => s === 'Accepted' },
-  { id: 'cancelled', label: 'Cancelled', test: (s) => s === 'Cancelled' },
-]
+type Scope = 'mine' | 'review' | 'team' | 'overdue'
 
 export function ActivitiesWorkspace() {
-  const params = useSearchParams()
-  const { activities, perspective, updateActivity } = useStore()
-  const [selectedId, setSelectedId] = useState<string | null>(params.get('id') ?? 'ACT-1042')
-  const [filter, setFilter] = useState('all')
-  const [mine, setMine] = useState(false)
-  const [note, setNote] = useState('')
-  const a = activities.find((x) => x.id === selectedId)
-  const f = filters.find((x) => x.id === filter)!
+  const { company: c, me } = useHub()
+  const [scope, setScope] = useParam('scope', 'mine')
+  const [selected, setSelected] = useParam('id')
+  const [creating, setCreating] = useState(false)
 
-  const isReviewer = a?.reviewerId === perspective.id
-  const isOwner = a?.ownerId === perspective.id
-  const dep = a?.dependsOn ? activities.find((x) => x.id === a.dependsOn) : null
+  const filters: Record<Scope, (a: Activity) => boolean> = {
+    mine: (a) => a.ownerId === me.id,
+    review: (a) => a.reviewerId === me.id && a.status === 'Submitted for review',
+    team: () => true,
+    overdue: isOverdue,
+  }
+  const visible = c.activities.filter((a) => canSeeActivity(c, me, a))
+  const tabs = [
+    { id: 'mine', label: 'Owned by me', count: visible.filter(filters.mine).length },
+    { id: 'review', label: 'Awaiting my review', count: visible.filter(filters.review).length },
+    { id: 'overdue', label: 'Overdue', count: visible.filter(filters.overdue).length },
+    { id: 'team', label: 'All I can see', count: visible.length },
+  ]
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[1fr_380px]">
-      <Panel
-        title="Activities"
-        action={
-          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <input type="checkbox" checked={mine} onChange={(e) => setMine(e.target.checked)} /> Only mine
-          </label>
-        }
-      >
-        <div className="flex flex-wrap gap-1 border-b border-border px-3 py-2" role="group" aria-label="Status filter">
-          {filters.map((x) => (
-            <button key={x.id} type="button" aria-pressed={filter === x.id} onClick={() => setFilter(x.id)} className={`rounded px-2 py-1 text-xs ${filter === x.id ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}>
-              {x.label}
-            </button>
-          ))}
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <TabBar label="Activity scope" tabs={tabs} value={scope} onChange={(v) => setScope(v)} />
         </div>
-        <ActivityTable caption="All activities" filter={(x) => f.test(x.status) && (!mine || x.ownerId === perspective.id || x.reviewerId === perspective.id)} onSelect={setSelectedId} selectedId={selectedId} />
+        <Button onClick={() => setCreating(true)}>
+          <Plus /> New activity
+        </Button>
+      </div>
+      <Panel>
+        <ActivityTable caption="Activities" filter={filters[(scope as Scope) in filters ? (scope as Scope) : 'mine']} selectedId={selected} onSelect={(id) => setSelected(id)} empty={scope === 'review' ? 'Nothing is waiting for your review.' : 'No activities in this view.'} />
       </Panel>
+      <ActivityDetail id={selected} onClose={() => setSelected(null)} />
+      <CreateActivity open={creating} onOpenChange={setCreating} onCreated={(id) => setSelected(id)} />
+    </>
+  )
+}
 
-      {a ? (
-        <Panel title={a.title} description={`${a.id} · revision ${a.revision}`}>
-          <div className="flex flex-col gap-4 p-4">
-            <StatusPill status={a.status === 'Submitted' ? 'Submitted · awaiting acceptance' : a.status} className="self-start" />
-            <dl className="grid grid-cols-2 gap-4">
-              <KV label="Owner">
-                <PersonLink id={a.ownerId} />
-              </KV>
-              <KV label="Reviewer">
-                <PersonLink id={a.reviewerId} />
-              </KV>
-              <KV label="Due">
-                <DueCell a={a} />
-              </KV>
-              <KV label="Context">
-                <span className="flex flex-wrap gap-1">
-                  {a.projectId && <IdChip href={`/projects/${a.projectId}`}>{a.projectId}</IdChip>}
-                  {a.backlogId && <IdChip href={`/backlog?id=${a.backlogId}`}>{a.backlogId}</IdChip>}
-                  {!a.projectId && <span className="text-xs text-muted-foreground">Department work</span>}
-                </span>
-              </KV>
-            </dl>
-            {a.revisionReason && (
-              <Callout tone="muted" title="Due date revised">
-                {a.revisionReason}. Original date kept for history.
-              </Callout>
-            )}
-            {a.blocker && <Callout tone="danger" title="Blocked">{a.blocker}</Callout>}
-            {dep && (
-              <p className="text-sm text-muted-foreground">
-                Depends on{' '}
-                <button type="button" className="font-mono text-foreground hover:underline" onClick={() => setSelectedId(dep.id)}>
-                  {dep.id}
-                </button>{' '}
-                — <StatusPill status={dep.status} />
-              </p>
-            )}
-            {a.evidence && (
-              <div className="flex flex-col gap-1">
-                <span className="text-xs text-muted-foreground">Evidence</span>
-                <p className="rounded-md border border-border bg-background p-2.5 text-sm text-foreground">{a.evidence}</p>
+function ActivityDetail({ id, onClose }: { id: string; onClose: () => void }) {
+  const { company: c, me, mutate } = useHub()
+  const a = c.activities.find((x) => x.id === id)
+  const allowed = a && canSeeActivity(c, me, a)
+  const [evidence, setEvidence] = useState('')
+  const [note, setNote] = useState('')
+  const [revise, setRevise] = useState({ date: '', reason: '' })
+  const [err, setErr] = useState('')
+
+  const update = (fn: (x: Activity, now: string) => void, msg: string) => {
+    mutate((co, { now, audit, me: who }) => {
+      const x = co.activities.find((y) => y.id === id)
+      if (!x) return
+      fn(x, now)
+      x.history.push({ at: now, by: who.id, text: msg })
+      audit(msg, x.id)
+    })
+    toast.success(msg)
+    setErr('')
+  }
+
+  const isOwner = a?.ownerId === me.id
+  const isReviewer = a?.reviewerId === me.id
+  const setStatus = (s: ActivityStatus, extra?: (x: Activity) => void) => update((x) => ((x.status = s), extra?.(x)), `Status → ${s}`)
+
+  return (
+    <Sheet open={!!id} onOpenChange={(o) => !o && onClose()}>
+      <SheetContent side="right" className="w-full gap-0 overflow-y-auto p-0 sm:max-w-xl">
+        {!a || !allowed ? (
+          <div className="p-6">
+            <SheetHeader className="p-0">
+              <SheetTitle>Activity unavailable</SheetTitle>
+              <SheetDescription>It does not exist or is outside your permissions.</SheetDescription>
+            </SheetHeader>
+          </div>
+        ) : (
+          <>
+            <SheetHeader className="border-b border-border p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <IdChip>{a.id}</IdChip>
+                <StatusPill status={a.status} />
+                {isOverdue(a) && <StatusPill status="Overdue" tone="danger" />}
               </div>
-            )}
+              <SheetTitle className="text-pretty">{a.title}</SheetTitle>
+              <SheetDescription>{a.outcome}</SheetDescription>
+            </SheetHeader>
+            <div className="flex flex-col gap-5 p-4">
+              <dl className="grid grid-cols-2 gap-4">
+                <KV label="Owner">
+                  <PersonLink id={a.ownerId} />
+                </KV>
+                <KV label="Reviewer">
+                  <PersonLink id={a.reviewerId} />
+                </KV>
+                <KV label="Origin">
+                  <Link href={originOf(c, a).href} className="hover:underline">
+                    {originOf(c, a).label}
+                  </Link>
+                </KV>
+                <KV label="Due">
+                  <DueCell a={a} />
+                </KV>
+                <KV label="Priority">{a.priority}</KV>
+                <KV label="Revision">r{a.revision}{a.reworkCount ? ` · reworked ${a.reworkCount}×` : ''}</KV>
+              </dl>
+              {a.revisionReason && <Callout tone="muted" title="Due date revised">{a.revisionReason}</Callout>}
+              {a.blocker && a.status === 'Blocked' && <Callout tone="danger" title="Blocked">{a.blocker}</Callout>}
+              {a.evidence && <Callout tone="info" title="Evidence submitted">{a.evidence}</Callout>}
+              {err && <Callout tone="danger" title={err} />}
 
-            {a.status === 'Submitted' && isReviewer && (
-              <div className="flex flex-col gap-2 border-t border-border pt-4">
-                <label htmlFor="review-note" className="text-xs font-medium text-muted-foreground">
-                  Review note (required to reopen)
-                </label>
-                <Textarea id="review-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="What needs to change?" />
-                <div className="flex gap-2">
+              {a.checklist.length > 0 && (
+                <fieldset className="flex flex-col gap-1.5">
+                  <legend className="pb-1 text-xs font-medium text-foreground">Checklist</legend>
+                  {a.checklist.map((item, i) => (
+                    <label key={i} className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" checked={item.done} disabled={!isOwner || !isOpen(a)} onChange={() => update((x) => void (x.checklist[i].done = !x.checklist[i].done), `Checklist: ${item.text}`)} />
+                      {item.text}
+                    </label>
+                  ))}
+                </fieldset>
+              )}
+
+              {isOwner && isOpen(a) && a.status !== 'Submitted for review' && (
+                <section className="flex flex-col gap-3 rounded-md border border-border p-3">
+                  <h3 className="text-sm font-semibold text-foreground">Owner actions</h3>
+                  <div className="flex flex-wrap gap-2">
+                    {a.status !== 'In progress' && <Button size="sm" variant="outline" onClick={() => setStatus('In progress', (x) => (x.blocker = undefined))}>Start / resume</Button>}
+                    {a.status !== 'Blocked' && (
+                      <Button size="sm" variant="outline" onClick={() => (note.trim() ? setStatus('Blocked', (x) => (x.blocker = note.trim())) : setErr('Describe the blocker in the note field first.'))}>
+                        Mark blocked
+                      </Button>
+                    )}
+                  </div>
+                  <Field label="Note / blocker reason">
+                    <TextInput value={note} onChange={(e) => setNote(e.target.value)} />
+                  </Field>
+                  <Field label="Completion evidence" hint="Link or description the reviewer will check.">
+                    <TextArea value={evidence} onChange={(e) => setEvidence(e.target.value)} />
+                  </Field>
                   <Button
                     size="sm"
                     onClick={() => {
-                      updateActivity(a.id, { status: 'Accepted' })
-                      toast.success(`${a.id} accepted`, { description: 'Counts toward Ana’s accepted work. Visible in project, profile and dossier.' })
+                      if (!evidence.trim()) return setErr('Evidence is required to submit for review.')
+                      update((x) => ((x.status = 'Submitted for review'), (x.evidence = evidence.trim())), `Submitted for review to ${empOf(c, a.reviewerId)?.fullName}`)
+                      setEvidence('')
                     }}
                   >
-                    Accept
+                    Submit for review
                   </Button>
+                </section>
+              )}
+
+              {isReviewer && a.status === 'Submitted for review' && (
+                <section className="flex flex-col gap-3 rounded-md border border-border p-3">
+                  <h3 className="text-sm font-semibold text-foreground">Review</h3>
+                  <Field label="Review note" hint="Required when reopening.">
+                    <TextArea value={note} onChange={(e) => setNote(e.target.value)} />
+                  </Field>
+                  <div className="flex flex-wrap gap-2">
+                    <Button size="sm" onClick={() => update((x) => ((x.status = 'Accepted'), (x.acceptedAt = TODAY)), 'Accepted by reviewer')}>
+                      Accept
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        if (!note.trim()) return setErr('Explain what needs to change before reopening.')
+                        update((x) => ((x.status = 'Reopened'), x.reworkCount++, (x.evidence = `Reviewer: ${note.trim()}`)), 'Reopened by reviewer')
+                        setNote('')
+                      }}
+                    >
+                      Reopen
+                    </Button>
+                  </div>
+                </section>
+              )}
+
+              {(isOwner || isReviewer) && isOpen(a) && (
+                <section className="flex flex-col gap-3 rounded-md border border-border p-3">
+                  <h3 className="text-sm font-semibold text-foreground">Revise due date</h3>
+                  <p className="text-xs text-muted-foreground">The original date {a.originalDue} is always kept for productivity evidence.</p>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <Field label="New due date">
+                      <TextInput type="date" value={revise.date} onChange={(e) => setRevise({ ...revise, date: e.target.value })} />
+                    </Field>
+                    <Field label="Reason">
+                      <TextInput value={revise.reason} onChange={(e) => setRevise({ ...revise, reason: e.target.value })} />
+                    </Field>
+                  </div>
                   <Button
                     size="sm"
                     variant="outline"
-                    disabled={!note.trim()}
+                    className="self-start"
                     onClick={() => {
-                      updateActivity(a.id, { status: 'Reopened', evidence: `Reopened: ${note}` })
-                      setNote('')
-                      toast(`${a.id} reopened`, { description: 'Owner notified with your note.' })
+                      if (!revise.date || !revise.reason.trim()) return setErr('A new date and a reason are both required.')
+                      update((x) => ((x.revisedDue = revise.date), (x.revisionReason = revise.reason.trim()), x.revision++), `Due revised ${dueOf(a)} → ${revise.date}`)
+                      setRevise({ date: '', reason: '' })
                     }}
                   >
-                    Reopen
+                    Save revised date
                   </Button>
-                </div>
-              </div>
-            )}
-            {a.status === 'Submitted' && isOwner && <Callout tone="info" title="Awaiting acceptance">{empById(a.reviewerId)?.fullName} reviews this. You can&apos;t accept your own work.</Callout>}
-            {(a.status === 'In progress' || a.status === 'Reopened') && isOwner && (
-              <div className="flex gap-2 border-t border-border pt-4">
-                <Button size="sm" onClick={() => { updateActivity(a.id, { status: 'Submitted' }); toast.success(`${a.id} submitted for review`) }}>
-                  Submit for review
-                </Button>
-                <Button size="sm" variant="outline" onClick={() => toast('Due-date revision requested', { description: 'Sent to project manager. Original date is preserved.' })}>
-                  Request date change
-                </Button>
-              </div>
-            )}
-            {!isOwner && !isReviewer && <p className="text-xs text-muted-foreground">Read-only for your role. Owner submits; reviewer accepts or reopens.</p>}
-            <Link href={`/employees/${a.ownerId}`} className="text-sm font-medium text-info hover:underline">
-              Open owner profile
-            </Link>
-          </div>
-        </Panel>
-      ) : (
-        <Panel title="No activity selected">
-          <p className="p-4 text-sm text-muted-foreground">Select an activity to see evidence, dependencies and review actions.</p>
-        </Panel>
-      )}
-    </div>
+                </section>
+              )}
+
+              <section className="flex flex-col gap-2">
+                <h3 className="text-sm font-semibold text-foreground">History</h3>
+                <ol className="flex flex-col gap-1.5 border-l border-border pl-3">
+                  {[...a.history].reverse().map((h, i) => (
+                    <li key={i} className="text-xs leading-relaxed">
+                      <span className="font-mono text-muted-foreground">{h.at}</span> <span className="text-foreground">{h.text}</span>{' '}
+                      <span className="text-muted-foreground">— {empOf(c, h.by)?.fullName ?? 'System'}</span>
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            </div>
+          </>
+        )}
+      </SheetContent>
+    </Sheet>
   )
+}
+
+export function CreateActivity({ open, onOpenChange, onCreated, preset }: { open: boolean; onOpenChange: (o: boolean) => void; onCreated?: (id: string) => void; preset?: { projectId?: string; productId?: string; dept?: string; backlogId?: string } }) {
+  const { me, mutate } = useHub()
+  const people = usePeopleOptions()
+  const depts = useDeptOptions()
+  const products = useProductOptions()
+  const projects = useProjectOptions()
+  const f = useForm({ title: '', outcome: '', ownerId: me.id, reviewerId: '', dept: preset?.dept ?? me.dept, projectId: preset?.projectId ?? '', productId: preset?.productId ?? '', due: '', priority: 'Medium' })
+
+  const submit = () => {
+    const ok = f.validate({
+      title: required('Title'),
+      outcome: required('Expected outcome'),
+      reviewerId: (v, all) => (!v ? 'Reviewer is required' : v === all.ownerId ? 'Reviewer must differ from owner' : undefined),
+      due: (v) => (!v ? 'Due date is required' : String(v) < TODAY ? 'Due date cannot be in the past' : undefined),
+    })
+    if (!ok) return
+    let newId = ''
+    mutate((co, { id, now, audit, me: who }) => {
+      newId = id('ACT')
+      const v = f.values
+      co.activities.unshift({
+        id: newId,
+        title: v.title.trim(),
+        outcome: v.outcome.trim(),
+        ownerId: v.ownerId,
+        reviewerId: v.reviewerId,
+        dept: v.dept,
+        projectId: v.projectId || null,
+        productId: v.productId || null,
+        backlogId: preset?.backlogId,
+        status: 'Planned',
+        priority: v.priority as Activity['priority'],
+        start: TODAY,
+        originalDue: v.due,
+        revisedDue: null,
+        revision: 1,
+        checklist: [],
+        reworkCount: 0,
+        history: [{ at: now, by: who.id, text: 'Created' }],
+      })
+      audit('Created activity', newId, v.title)
+    })
+    toast.success('Activity created')
+    f.reset()
+    onOpenChange(false)
+    setTimeout(() => newId && onCreated?.(newId), 0)
+  }
+
+  return (
+    <FormSheet open={open} onOpenChange={onOpenChange} title="New activity" description="One canonical record. The owner submits evidence; the reviewer accepts or reopens." onSubmit={submit} submitLabel="Create activity">
+      <Field label="Title" required error={f.errors.title}>
+        <TextInput {...f.bind('title')} />
+      </Field>
+      <Field label="Expected outcome" required error={f.errors.outcome}>
+        <TextArea {...f.bind('outcome')} />
+      </Field>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Owner" required>
+          <Select options={people} {...f.bind('ownerId')} />
+        </Field>
+        <Field label="Reviewer" required error={f.errors.reviewerId}>
+          <Select placeholder="Choose reviewer" options={people} {...f.bind('reviewerId')} />
+        </Field>
+        <Field label="Department">
+          <Select options={depts} {...f.bind('dept')} />
+        </Field>
+        <Field label="Due date" required error={f.errors.due}>
+          <TextInput type="date" {...f.bind('due')} />
+        </Field>
+        <Field label="Project (optional)">
+          <Select placeholder="None" options={projects} {...f.bind('projectId')} />
+        </Field>
+        <Field label="Product / service (optional)">
+          <Select placeholder="None" options={products} {...f.bind('productId')} />
+        </Field>
+        <Field label="Priority">
+          <Select options={['Low', 'Medium', 'High', 'Critical'].map((p) => ({ value: p, label: p }))} {...f.bind('priority')} />
+        </Field>
+      </div>
+    </FormSheet>
+  )
+}
+
+export function NoAccess() {
+  return <StateBlock title="Not available" body="This record is outside your permissions." />
 }

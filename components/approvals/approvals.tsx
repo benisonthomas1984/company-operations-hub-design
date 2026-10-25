@@ -1,174 +1,219 @@
 'use client'
 
 import { useState } from 'react'
-import { useSearchParams } from 'next/navigation'
+import Link from 'next/link'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { Textarea } from '@/components/ui/textarea'
-import { useStore } from '@/lib/store'
-import { empById, type ApprovalRound, type Decision } from '@/lib/fixtures'
-import { ApprovalProgress, Avatar, Callout, IdChip, KV, Panel, StatusPill, decisionMeta } from '@/components/hub/primitives'
+import { useHub } from '@/lib/store'
+import type { ApprovalRound } from '@/lib/fixtures'
+import { empOf, sourceHref } from '@/lib/derive'
+import { ApprovalProgress, Callout, IdChip, KV, Panel, PersonLink, StatusPill, decisionMeta } from '@/components/hub/primitives'
+import { Field, TabBar, TextArea, useParam } from '@/components/hub/form'
+import { StateBlock } from '@/components/hub/page'
 import { cn } from '@/lib/utils'
 
-function involves(r: ApprovalRound, id: string) {
-  return r.submittedBy === id || r.stages.some((s) => s.decisions.some((d) => d.personId === id))
+const mine = (r: ApprovalRound, id: string) => r.stages.some((s) => s.decisions.some((d) => d.personId === id))
+const myPending = (r: ApprovalRound, id: string) => r.stages.some((s) => s.decisions.some((d) => d.personId === id && d.decision === 'pending'))
+
+export function ApprovalsWorkspace() {
+  const { company: c, me, can } = useHub()
+  const [tab, setTab] = useParam('tab', 'pending')
+  const [sel, setSel] = useParam('id')
+  const canCase = can('complaints.case')
+  const visible = c.approvals.filter((r) => (!r.restricted || canCase) && (mine(r, me.id) || r.submittedBy === me.id || can('manage')))
+  const lists: Record<string, ApprovalRound[]> = {
+    pending: visible.filter((r) => myPending(r, me.id) && r.status === 'Pending'),
+    submitted: visible.filter((r) => r.submittedBy === me.id),
+    decided: visible.filter((r) => mine(r, me.id) && !myPending(r, me.id)),
+    all: visible,
+  }
+  const rows = lists[tab] ?? lists.pending
+  const selected = c.approvals.find((r) => r.id === sel)
+  const selectedAllowed = selected && visible.includes(selected)
+
+  return (
+    <div className="flex flex-col gap-4">
+      <TabBar
+        label="Approval lists"
+        value={tab}
+        onChange={(v) => setTab(v)}
+        tabs={[
+          { id: 'pending', label: 'Needs my decision', count: lists.pending.length },
+          { id: 'submitted', label: 'Submitted by me', count: lists.submitted.length },
+          { id: 'decided', label: 'I decided', count: lists.decided.length },
+          ...(can('manage') ? [{ id: 'all', label: 'All rounds', count: lists.all.length }] : []),
+        ]}
+      />
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+        <Panel>
+          {rows.length === 0 ? (
+            <p className="p-4 text-sm text-muted-foreground">{tab === 'pending' ? 'Nothing needs your decision right now.' : 'No approval rounds here.'}</p>
+          ) : (
+            <ul className="flex flex-col divide-y divide-border">
+              {rows.map((r) => (
+                <li key={r.id}>
+                  <button type="button" onClick={() => setSel(r.id)} className={cn('flex w-full flex-col gap-1.5 px-4 py-3 text-left', sel === r.id ? 'bg-accent' : 'hover:bg-muted/50')}>
+                    <span className="flex flex-wrap items-center gap-2">
+                      <IdChip>{r.id}</IdChip>
+                      <span className="text-xs text-muted-foreground">{r.itemType}</span>
+                      <StatusPill status={r.status} />
+                    </span>
+                    <span className="text-sm font-medium text-foreground">{r.itemTitle}</span>
+                    <ApprovalProgress compact decisions={r.stages.flatMap((s) => s.decisions)} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+        {sel && !selectedAllowed ? (
+          <StateBlock title="Approval unavailable" body="This approval round does not exist or is outside your permissions." />
+        ) : selected ? (
+          <RoundDetail r={selected} />
+        ) : (
+          <StateBlock title="Select an approval round" body="Pick a round to see each approver's decision and act on your own." />
+        )}
+      </div>
+    </div>
+  )
 }
 
-export function Approvals() {
-  const params = useSearchParams()
-  const { approvals, perspective, decide, can } = useStore()
-  const [tab, setTab] = useState<'mine' | 'all'>('mine')
+function RoundDetail({ r }: { r: ApprovalRound }) {
+  const { company: c, me, decide } = useHub()
   const [note, setNote] = useState('')
+  const [err, setErr] = useState('')
+  const canAct = r.status === 'Pending' && myPending(r, me.id)
 
-  const visible = approvals.filter((r) => (r.restricted ? involves(r, perspective.id) : tab === 'all' ? can('settings.manage') || involves(r, perspective.id) : involves(r, perspective.id)))
-  const [selectedId, setSelectedId] = useState<string | null>(params.get('id'))
-  const r = visible.find((x) => x.id === selectedId) ?? visible[0]
-
-  const myDecision = r?.stages.flatMap((s) => s.decisions).find((d) => d.personId === perspective.id)
-  const isSubmitter = r?.submittedBy === perspective.id
-  const awaitingMe = (x: ApprovalRound) => x.stages.some((s) => s.decisions.some((d) => d.personId === perspective.id && d.decision === 'pending'))
-
-  const act = (decision: Decision) => {
-    if (!r) return
-    decide(r.id, perspective.id, decision, note || undefined)
+  const act = (d: 'approved' | 'changes' | 'rejected') => {
+    if (d !== 'approved' && !note.trim()) return setErr('A note is required when requesting changes or rejecting.')
+    decide(r.id, d, note.trim() || undefined)
     setNote('')
-    toast.success(`Decision recorded on ${r.id}`, { description: `${decisionMeta[decision].label} · bound to ${r.revision}, round ${r.round}` })
+    setErr('')
+    toast.success(d === 'approved' ? 'Approved' : d === 'changes' ? 'Changes requested' : 'Rejected', { description: 'The source record was updated.' })
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[360px_1fr]">
-      <Panel>
-        <div className="flex gap-1 border-b border-border p-2" role="tablist" aria-label="Approval scope">
-          {(['mine', 'all'] as const).map((t) => (
-            <button key={t} role="tab" aria-selected={tab === t} type="button" onClick={() => setTab(t)} className={cn('rounded px-2.5 py-1 text-xs', tab === t ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted')}>
-              {t === 'mine' ? 'Involving me' : 'All I can see'}
-            </button>
-          ))}
-        </div>
-        <ul className="divide-y divide-border">
-          {visible.map((x) => {
-            const all = x.stages.flatMap((s) => s.decisions)
-            return (
-              <li key={x.id}>
-                <button type="button" onClick={() => setSelectedId(x.id)} aria-current={r?.id === x.id} className={cn('flex w-full flex-col gap-1.5 px-4 py-3 text-left', r?.id === x.id ? 'bg-accent' : 'hover:bg-muted/50')}>
-                  <div className="flex items-center gap-2">
-                    <IdChip>{x.id}</IdChip>
-                    <span className="text-xs text-muted-foreground">{x.itemType}</span>
-                    {awaitingMe(x) && <span className="ml-auto rounded-sm bg-warning px-1.5 text-[10px] font-semibold text-primary-foreground">YOUR TURN</span>}
-                  </div>
-                  <span className="text-sm font-medium text-foreground">{x.restricted ? 'Restricted complaint case' : x.itemTitle}</span>
-                  <div className="flex items-center justify-between gap-2">
-                    <ApprovalProgress decisions={all} compact />
-                    <StatusPill status={x.status} />
-                  </div>
-                </button>
-              </li>
-            )
-          })}
-          {!visible.length && <li className="p-4 text-sm text-muted-foreground">Nothing needs your decision.</li>}
-        </ul>
-      </Panel>
-
-      {r ? (
-        <div className="flex flex-col gap-4">
-          <Panel title={r.itemTitle} description={`${r.itemType} ${r.itemId} · ${r.revision} · round ${r.round}`} action={<StatusPill status={r.status} />}>
-            <div className="flex flex-col gap-4 p-4">
-              <p className="text-sm leading-relaxed text-foreground">{r.summary}</p>
-              <dl className="grid grid-cols-2 gap-4 md:grid-cols-4">
-                <KV label="Submitted by">{empById(r.submittedBy)?.fullName}</KV>
-                <KV label="Submitted">{r.submittedAt}</KV>
-                <KV label="Workflow version">{r.workflowVersion}</KV>
-                <KV label="Rule">Every required approver</KV>
-              </dl>
-              {r.restricted && <Callout tone="warning" title="Restricted case">Notifications are in-app only. Conflicted members are excluded from this committee.</Callout>}
-            </div>
-          </Panel>
-
-          {r.stages.map((s) => (
-            <Panel key={s.name} title={s.name} description={s.mode === 'Ordered stage' ? 'Ordered: opens after the previous stage is fully approved.' : 'Concurrent: everyone decides in any order. One rejection or change request stops approval.'} action={<ApprovalProgress decisions={s.decisions} />}>
-              <ul className="divide-y divide-border">
-                {s.decisions.map((d) => {
-                  const m = decisionMeta[d.decision]
-                  return (
-                    <li key={d.personId} className="flex flex-wrap items-center gap-3 px-4 py-3">
-                      <Avatar id={d.personId} />
-                      <div className="flex min-w-40 flex-col">
-                        <span className="text-sm font-medium text-foreground">
-                          {empById(d.personId)?.fullName}
-                          {d.personId === perspective.id && <span className="ml-1 text-xs text-muted-foreground">(you)</span>}
-                        </span>
-                        <span className="text-xs text-muted-foreground">{empById(d.personId)?.designation}</span>
-                      </div>
+    <Panel
+      title={r.itemTitle}
+      description={`${r.itemType} · ${r.revision} · round ${r.round} · ${r.workflowVersion}`}
+      action={
+        <Link href={sourceHref(r)} className="text-xs text-info hover:underline">
+          Open source record
+        </Link>
+      }
+    >
+      <div className="flex flex-col gap-4 p-4">
+        <dl className="grid grid-cols-2 gap-4">
+          <KV label="Submitted by">
+            <PersonLink id={r.submittedBy} />
+          </KV>
+          <KV label="Submitted">{r.submittedAt}</KV>
+          <KV label="Status">
+            <StatusPill status={r.status} />
+          </KV>
+          {r.amount !== undefined && <KV label="Amount">{new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(r.amount)}</KV>}
+        </dl>
+        <p className="text-sm leading-relaxed text-foreground">{r.summary}</p>
+        <Callout tone="info" title="Every listed approver must approve">
+          One change request or rejection stops the round. Resubmission starts a new round against a new revision.
+        </Callout>
+        {r.stages.map((s, i) => (
+          <section key={i} className="flex flex-col gap-2 rounded-md border border-border p-3">
+            <h3 className="flex items-center justify-between text-sm font-semibold text-foreground">
+              {s.name} <span className="text-xs font-normal text-muted-foreground">{s.mode}</span>
+            </h3>
+            <ul className="flex flex-col gap-2">
+              {s.decisions.map((d) => {
+                const m = decisionMeta[d.decision]
+                return (
+                  <li key={d.personId} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <PersonLink id={d.personId} showRole />
+                    <span className="flex flex-col items-end gap-0.5">
                       <StatusPill status={m.label} tone={m.tone} />
-                      {d.at && <span className="font-mono text-xs text-muted-foreground">{d.at}</span>}
-                      {d.note && <p className="w-full rounded-md bg-muted p-2 text-xs text-foreground">{d.note}</p>}
-                    </li>
-                  )
-                })}
-              </ul>
-            </Panel>
-          ))}
-
-          <Panel title="Your decision">
-            <div className="flex flex-col gap-3 p-4">
-              {isSubmitter ? (
-                <Callout tone="muted" title="You submitted this item">Self-approval is not allowed. You&apos;ll be notified when all approvers decide.</Callout>
-              ) : myDecision?.decision === 'pending' ? (
-                <>
-                  <label htmlFor="decision-note" className="text-xs font-medium text-muted-foreground">
-                    Note (required for changes or rejection)
-                  </label>
-                  <Textarea id="decision-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Explain your decision" />
-                  <div className="flex flex-wrap gap-2">
-                    <Button size="sm" onClick={() => act('approved')}>
-                      Approve
-                    </Button>
-                    <Button size="sm" variant="outline" disabled={!note.trim()} onClick={() => act('changes')}>
-                      Request changes
-                    </Button>
-                    <Button size="sm" variant="outline" className="text-destructive" disabled={!note.trim()} onClick={() => act('rejected')}>
-                      Reject
-                    </Button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">Your decision is bound to {r.revision}. Material edits start a new round.</p>
-                </>
-              ) : myDecision?.decision === 'blocked' ? (
-                <Callout tone="muted" title="Waiting on an earlier stage">You can decide once the previous stage is fully approved.</Callout>
-              ) : myDecision ? (
-                <Callout tone="success" title={`You decided: ${decisionMeta[myDecision.decision].label}`}>Recorded {myDecision.at}. Decisions are immutable; history is kept.</Callout>
-              ) : (
-                <p className="text-sm text-muted-foreground">You are not an approver on this round.</p>
-              )}
-              {r.status === 'Blocked — approver inactive' && can('settings.manage') && (
-                <Button size="sm" variant="outline" className="self-start" onClick={() => toast('Replacement flow', { description: 'Pick an eligible replacement and record a reason. The required count stays the same.' })}>
-                  Replace inactive approver
-                </Button>
-              )}
-            </div>
-          </Panel>
-
-          {r.priorRounds && (
-            <Panel title="Earlier rounds">
-              <ul className="divide-y divide-border">
-                {r.priorRounds.map((p) => (
-                  <li key={p.round} className="flex flex-col gap-1 px-4 py-3">
-                    <div className="flex items-center gap-2 text-sm">
-                      <span className="font-medium text-foreground">Round {p.round}</span>
-                      <span className="text-muted-foreground">{p.revision}</span>
-                      <StatusPill status={p.status} className="ml-auto" />
-                    </div>
-                    <p className="text-xs leading-relaxed text-muted-foreground">{p.note}</p>
+                      {d.at && <span className="font-mono text-[11px] text-muted-foreground">{d.at}</span>}
+                      {d.note && <span className="text-xs text-muted-foreground">“{d.note}”</span>}
+                    </span>
                   </li>
-                ))}
-              </ul>
-            </Panel>
-          )}
-        </div>
-      ) : (
-        <Panel title="No approval selected">
-          <p className="p-4 text-sm text-muted-foreground">Nothing to show for this perspective.</p>
-        </Panel>
-      )}
-    </div>
+                )
+              })}
+            </ul>
+          </section>
+        ))}
+        {r.priorRounds && r.priorRounds.length > 0 && (
+          <section className="flex flex-col gap-1">
+            <h3 className="text-sm font-semibold text-foreground">Earlier rounds</h3>
+            {r.priorRounds.map((p) => (
+              <p key={p.round} className="text-xs text-muted-foreground">
+                Round {p.round} ({p.revision}): {p.status} — {p.note}
+              </p>
+            ))}
+          </section>
+        )}
+        {canAct && (
+          <section className="flex flex-col gap-3 rounded-md border border-ring/40 bg-accent/40 p-3">
+            <h3 className="text-sm font-semibold text-foreground">Your decision</h3>
+            {err && <Callout tone="danger" title={err} />}
+            <Field label="Note" hint="Required for change requests and rejections.">
+              <TextArea value={note} onChange={(e) => setNote(e.target.value)} />
+            </Field>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => act('approved')}>Approve</Button>
+              <Button variant="outline" onClick={() => act('changes')}>
+                Request changes
+              </Button>
+              <Button variant="outline" className="text-destructive" onClick={() => act('rejected')}>
+                Reject
+              </Button>
+            </div>
+          </section>
+        )}
+        <section className="flex flex-col gap-1">
+          <h3 className="text-sm font-semibold text-foreground">History</h3>
+          {r.history.map((h, i) => (
+            <p key={i} className="text-xs text-muted-foreground">
+              <span className="font-mono">{h.at}</span> {empOf(c, h.by)?.fullName ?? 'System'}: {h.text}
+            </p>
+          ))}
+        </section>
+      </div>
+    </Panel>
   )
+}
+
+/** Opens an approval round for any source record using the configured workflow; returns its id. */
+export function buildRound(c: Parameters<Parameters<ReturnType<typeof useHub>['mutate']>[0]>[0], input: { id: string; itemType: ApprovalRound['itemType']; itemId: string; itemTitle: string; revision: string; approverIds: string[]; submittedBy: string; now: string; summary: string; amount?: number; restricted?: boolean }) {
+  const prior = c.approvals.filter((r) => r.itemId === input.itemId && r.itemType === input.itemType)
+  prior.forEach((r) => r.status === 'Pending' && (r.status = 'Superseded'))
+  const wf = c.workflows.find((w) => w.appliesTo === input.itemType)
+  const ids = Array.from(new Set(input.approverIds)).filter(Boolean)
+  const round: ApprovalRound = {
+    id: input.id,
+    itemType: input.itemType,
+    itemId: input.itemId,
+    itemTitle: input.itemTitle,
+    revision: input.revision,
+    round: prior.length + 1,
+    workflowVersion: wf ? `${wf.name} v${wf.version}` : 'Named approvers',
+    status: 'Pending',
+    submittedBy: input.submittedBy,
+    submittedAt: input.now,
+    summary: input.summary,
+    amount: input.amount,
+    restricted: input.restricted,
+    stages: [
+      {
+        name: 'Approval',
+        mode: 'Concurrent ALL',
+        decisions: ids.map((personId) => {
+          const e = c.employees.find((x) => x.id === personId)
+          return { personId, decision: e?.status === 'active' ? 'pending' : 'inactive' }
+        }),
+      },
+    ],
+    priorRounds: prior.map((p) => ({ round: p.round, revision: p.revision, status: p.status, note: p.history.at(-1)?.text ?? '' })),
+    history: [{ at: input.now, by: input.submittedBy, text: `Submitted to ${ids.length} approver(s)` }],
+  }
+  if (round.stages[0].decisions.some((d) => d.decision === 'inactive')) round.status = 'Blocked — approver inactive'
+  c.approvals.unshift(round)
+  return round.id
 }
