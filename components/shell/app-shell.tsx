@@ -11,6 +11,7 @@ import { accessRoleLabel } from '@/lib/fixtures'
 import { noticesFor } from '@/lib/derive'
 import { SidebarNav } from './sidebar'
 import { GlobalSearch } from './global-search'
+import { SampleDataButton } from './sample-data-button'
 import { Avatar } from '@/components/hub/primitives'
 import { cn } from '@/lib/utils'
 
@@ -85,6 +86,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex flex-1 justify-center">
             <GlobalSearch />
           </div>
+          <SampleDataButton />
           <Link
             href={store.can('settings') ? '/settings/subscription' : '/dossier'}
             className="hidden items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:bg-muted md:flex"

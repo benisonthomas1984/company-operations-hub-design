@@ -85,6 +85,7 @@ type Store = {
   priv: PrivateState
   setPriv: (fn: (p: PrivateState) => PrivateState) => void
   resetDemo: () => void
+  loadSampleData: () => void
 }
 
 const StoreContext = createContext<Store | null>(null)
@@ -365,6 +366,31 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
 
   const resetDemo = useCallback(() => setDb(seed()), [])
 
+  /**
+   * DEV ONLY — remove before production. Replaces the signed-in company's records with the
+   * full sample dataset (company name, founder/owner, people, org, finance, everything) and
+   * re-points the current login to the sample owner so the same credentials keep working.
+   */
+  const loadSampleData = useCallback(
+    () =>
+      update((d) => {
+        if (!d.session) return
+        const cid = d.session.companyId
+        const prevPersonId = d.session.personId
+        const sample = demoCompany()
+        sample.id = cid
+        sample.onboarding.done = true
+        const owner = sample.employees.find((e) => e.accessRole === 'owner') ?? sample.employees[0]
+        d.companies[cid] = sample
+        d.accounts.forEach((a) => {
+          if (a.companyId === cid && a.personId === prevPersonId) a.personId = owner.id
+        })
+        Object.keys(d.private).forEach((k) => k.startsWith(`${cid}:`) && delete d.private[k])
+        d.session = { companyId: cid, personId: owner.id }
+      }),
+    [update],
+  )
+
   const value = useMemo<Store>(
     () => ({
       ready: !!db,
@@ -387,8 +413,9 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
       priv,
       setPriv,
       resetDemo,
+      loadSampleData,
     }),
-    [db, company, me, can, mutate, login, loginAs, logout, setSignupDraft, signupOwner, acceptInvite, findInvite, decide, spendAi, priv, setPriv, resetDemo],
+    [db, company, me, can, mutate, login, loginAs, logout, setSignupDraft, signupOwner, acceptInvite, findInvite, decide, spendAi, priv, setPriv, resetDemo, loadSampleData],
   )
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
