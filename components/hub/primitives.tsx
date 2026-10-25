@@ -187,7 +187,7 @@ export function Panel({ title, action, children, className, description }: { tit
           {action}
         </header>
       )}
-      <div className="flex flex-1 flex-col">{children}</div>
+      <div className="flex flex-1 flex-col p-4">{children}</div>
     </section>
   )
 }

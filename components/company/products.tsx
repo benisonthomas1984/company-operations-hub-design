@@ -5,7 +5,7 @@ import { fmtEUR, PERIOD, tickets } from '@/lib/fixtures'
 import { useHub } from '@/lib/store'
 import { productFinance, productOf } from '@/lib/derive'
 import { Callout, IdChip, KV, Panel, PersonLink, SourceChip, StatusPill } from '@/components/hub/primitives'
-import { StateBlock } from '@/components/hub/page'
+import { Page, StateBlock } from '@/components/hub/page'
 
 export function ProductList() {
   const { company: c } = useHub()
@@ -26,6 +26,16 @@ export function ProductList() {
         </Link>
       ))}
     </div>
+  )
+}
+
+export function ProductDetailPage({ id }: { id: string }) {
+  const { company: c } = useHub()
+  const b = productOf(c, id)
+  return (
+    <Page title={b?.name ?? 'Product'} description={b?.description} crumbs={[{ label: 'Products & Services', href: '/products' }]}>
+      <ProductDetail id={id} />
+    </Page>
   )
 }
 

@@ -1,189 +1,209 @@
 'use client'
 
 import Link from 'next/link'
-import { Check, Lock, Mail, Sparkles } from 'lucide-react'
+import { useState } from 'react'
+import { Lock, Plus } from 'lucide-react'
 import { toast } from 'sonner'
+import { accessRoleLabel, relLabel, TODAY } from '@/lib/fixtures'
+import { useHub } from '@/lib/store'
+import { directReports, empOf, productivity } from '@/lib/derive'
 import { Button } from '@/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { empById, projects, relationships, relLabel } from '@/lib/fixtures'
-import { useStore } from '@/lib/store'
-import { Avatar, Callout, DeptTag, IdChip, KV, Panel, SimLabel, StatusPill } from '@/components/hub/primitives'
+import { Avatar, Callout, DeptTag, KV, Panel, PersonLink, StatusPill } from '@/components/hub/primitives'
+import { Page, StateBlock } from '@/components/hub/page'
 import { ActivityTable } from '@/components/activities/activity-table'
-
-const comparison: Record<string, { duty: string; evidence: string | null; state: 'matched' | 'no-evidence' | 'unassigned' }[]> = {
-  ana: [
-    { duty: 'Integrations development', evidence: 'ACT-1042 Connect accounting API', state: 'matched' },
-    { duty: 'API reliability', evidence: 'ACT-1019 Retry logic for ledger webhook', state: 'matched' },
-    { duty: 'Code review', evidence: null, state: 'no-evidence' },
-    { duty: 'Technical documentation (not assigned)', evidence: 'ACT-1008 Document API rate limits', state: 'unassigned' },
-  ],
-}
+import { Field, FormSheet, TextArea, TextInput, required, useForm } from '@/components/hub/form'
 
 export function EmployeeProfile({ id }: { id: string }) {
-  const { perspective, can } = useStore()
-  const e = empById(id)
-  if (!e || e.status === 'vacancy') {
-    return <Callout tone="danger" title="Profile not available">This person doesn&apos;t exist in Comet Works or you don&apos;t have access.</Callout>
+  const { company: c, me, can, mutate } = useHub()
+  const e = empOf(c, id)
+  const [open, setOpen] = useState(false)
+  const f = useForm({ title: '', description: '', scope: '' })
+
+  if (!e || e.status === 'vacancy')
+    return (
+      <Page title="Employee not found" crumbs={[{ label: 'Employees', href: '/employees' }]}>
+        <StateBlock title="Not found" body={`This person isn't in ${c.name}.`} />
+      </Page>
+    )
+
+  const reports = directReports(c, e.id)
+  const isSelf = me.id === e.id
+  const isManagerOf = c.relationships.some((r) => r.from === e.id && r.to === me.id)
+  const seePersonal = isSelf || can('org.edit')
+  const outgoing = c.relationships.filter((r) => r.from === e.id)
+  const resp = c.responsibilities.filter((r) => r.employeeId === e.id && r.status === 'Active')
+  const prjs = c.projects.filter((p) => p.pmId === e.id || p.sponsorId === e.id || p.members.some((m) => m.personId === e.id))
+  const prod = productivity(c, e.id)
+  const canAssign = isManagerOf || can('org.edit')
+
+  const addResp = () => {
+    if (!f.validate({ title: required('Title'), description: required('Description'), scope: required('Scope') })) return
+    mutate((c2, ctx) => {
+      const rid = ctx.id('RSP')
+      c2.responsibilities.unshift({
+        id: rid,
+        employeeId: e.id,
+        title: f.values.title,
+        description: f.values.description,
+        scope: f.values.scope,
+        assignerId: ctx.me.id,
+        effective: TODAY,
+        approvalRequired: false,
+        status: 'Active',
+        versions: [{ v: 1, text: f.values.description, at: ctx.now, by: ctx.me.id, note: 'Assigned' }],
+      })
+      ctx.audit('responsibility.assign', rid, `${f.values.title} → ${e.fullName}`)
+    })
+    toast.success('Responsibility assigned')
+    f.reset()
+    setOpen(false)
   }
-  const isSelf = perspective.id === id
-  const canPersonal = isSelf || can('personal.restricted')
-  const rels = relationships.filter((r) => r.from === id)
-  const reports = relationships.filter((r) => r.to === id && r.type === 'direct')
-  const myProjects = projects.filter((p) => p.memberIds.includes(id) || p.pmId === id)
-  const cmp = comparison[id]
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-4 rounded-lg border border-border bg-card p-5 md:flex-row md:items-center">
-        <Avatar id={id} size="lg" />
-        <div className="flex flex-1 flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-lg font-semibold text-foreground">{e.fullName}</h2>
-            {e.status === 'inactive' && <StatusPill status="Inactive" />}
-            {isSelf && <span className="rounded-sm bg-muted px-1.5 text-xs text-muted-foreground">You</span>}
-          </div>
-          <p className="text-sm text-muted-foreground">{e.designation}</p>
-          <div className="flex flex-wrap items-center gap-3">
-            <DeptTag id={e.dept} />
-            <span className="font-mono text-xs text-muted-foreground">{e.email}</span>
-            <span className="text-xs text-muted-foreground">{e.location}</span>
-          </div>
-        </div>
-        {isSelf && (
-          <Link href="/productivity" className="text-sm font-medium text-info hover:underline">
-            My productivity evidence
-          </Link>
-        )}
-      </div>
-
-      <Tabs defaultValue="overview" className="flex flex-col gap-3">
-        <TabsList className="flex-wrap">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="responsibilities">Responsibilities</TabsTrigger>
-          <TabsTrigger value="activities">Activities</TabsTrigger>
-          <TabsTrigger value="projects">Projects ({myProjects.length})</TabsTrigger>
-          {isSelf && <TabsTrigger value="mail">My Mail</TabsTrigger>}
-        </TabsList>
-
-        <TabsContent value="overview" className="grid gap-4 lg:grid-cols-2">
-          <Panel title="Work profile">
-            <dl className="grid grid-cols-2 gap-4 p-4">
-              <KV label="Joined">{e.joined}</KV>
-              <KV label="Location">{e.location}</KV>
-              <KV label="Department">
-                <DeptTag id={e.dept} />
-              </KV>
-              <KV label="Direct reports">{reports.length}</KV>
-            </dl>
-          </Panel>
-          <Panel title="Restricted personal information" description="Visible only to the employee and explicitly authorized HR/admin roles.">
-            {canPersonal ? (
-              <dl className="grid grid-cols-2 gap-4 p-4">
-                <KV label="Personal phone">+351 9•• ••• 214</KV>
-                <KV label="Emergency contact">On file · 1 contact</KV>
-                <KV label="Date of birth">On file</KV>
-                <KV label="Tax ID">PT ••••••481</KV>
-              </dl>
+    <Page
+      title={
+        <span className="flex items-center gap-3">
+          <Avatar id={e.id} size="lg" />
+          <span className="flex flex-col">
+            {e.fullName}
+            <span className="text-sm font-normal text-muted-foreground">{e.designation}</span>
+          </span>
+        </span>
+      }
+      crumbs={[{ label: 'Employees', href: '/employees' }]}
+      actions={
+        <Link href={`/activities?owner=${e.id}`} className="text-sm font-medium text-info hover:underline">
+          View activities
+        </Link>
+      }
+    >
+      <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
+        <div className="flex min-w-0 flex-col gap-4">
+          <Panel
+            title="Responsibilities"
+            description="Ongoing accountabilities, separate from time-bound activities."
+            action={
+              canAssign && (
+                <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+                  <Plus aria-hidden /> Assign
+                </Button>
+              )
+            }
+          >
+            {resp.length ? (
+              <ul className="divide-y divide-border">
+                {resp.map((r) => (
+                  <li key={r.id} className="flex flex-col gap-1 py-2.5">
+                    <span className="font-medium text-foreground">{r.title}</span>
+                    <span className="text-sm leading-relaxed text-muted-foreground">{r.description}</span>
+                    <span className="text-xs text-muted-foreground">
+                      Scope: {r.scope} · since {r.effective} · assigned by {empOf(c, r.assignerId)?.fullName ?? 'Unknown'} · v{r.versions.length}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             ) : (
-              <p className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-                <Lock aria-hidden className="size-4" /> Restricted fields are not shown for your role.
-              </p>
+              <p className="text-sm text-muted-foreground">No responsibilities assigned.</p>
             )}
           </Panel>
-          <Panel title="Relationships" className="lg:col-span-2">
-            <ul className="divide-y divide-border">
-              {rels.map((r) => (
-                <li key={r.id} className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-sm">
-                  <span className="w-40 text-muted-foreground">{relLabel[r.type]}</span>
-                  <Link href={`/employees/${r.to}`} className="font-medium text-foreground hover:underline">
-                    {empById(r.to)?.fullName}
-                  </Link>
-                  {r.primary && <span className="rounded-sm bg-muted px-1 text-[10px] text-muted-foreground">Primary</span>}
-                  {r.context && <span className="text-xs text-muted-foreground">{r.context}</span>}
-                </li>
-              ))}
-              {rels.length === 0 && <li className="px-4 py-3 text-sm text-muted-foreground">Top of structure — no manager.</li>}
-            </ul>
-          </Panel>
-        </TabsContent>
 
-        <TabsContent value="responsibilities" className="grid gap-4 lg:grid-cols-2">
-          <Panel title="Assigned responsibilities" description="Set by managers or HR. Versioned.">
-            <ul className="divide-y divide-border">
-              {e.responsibilities.map((r) => (
-                <li key={r} className="px-4 py-2.5 text-sm text-foreground">
-                  {r}
-                </li>
-              ))}
-            </ul>
+          <Panel title="Activities">
+            <ActivityTable filter={(a) => a.ownerId === e.id} caption={`Activities owned by ${e.fullName}`} empty="No activities you can see for this person." />
           </Panel>
-          <Panel
-            title="Assigned vs observed work"
-            description="AI suggestion from accepted activities this quarter. Not a performance judgement."
-            action={<SimLabel>AI draft</SimLabel>}
-          >
-            {cmp ? (
-              <div className="flex flex-col">
-                <ul className="divide-y divide-border">
-                  {cmp.map((c) => (
-                    <li key={c.duty} className="flex flex-col gap-1 px-4 py-2.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm text-foreground">{c.duty}</span>
-                        <StatusPill status={c.state === 'matched' ? 'Evidence found' : c.state === 'no-evidence' ? 'No evidence in period' : 'Observed, not assigned'} tone={c.state === 'matched' ? 'success' : c.state === 'no-evidence' ? 'muted' : 'info'} />
-                      </div>
-                      {c.evidence && <span className="text-xs text-muted-foreground">{c.evidence}</span>}
-                    </li>
-                  ))}
-                </ul>
-                <div className="flex flex-wrap items-center gap-2 border-t border-border p-3">
-                  <Sparkles aria-hidden className="size-4 text-muted-foreground" />
-                  <span className="text-xs text-muted-foreground">Suggestion · confidence medium · 4 sources</span>
-                  <Button size="sm" variant="outline" className="ml-auto" onClick={() => toast.success('Suggestion confirmed', { description: 'Saved to responsibility history with reviewer and time.' })}>
-                    <Check /> Confirm
-                  </Button>
-                </div>
+
+          <Panel title="Projects">
+            {prjs.length ? (
+              <ul className="flex flex-col gap-2">
+                {prjs.map((p) => (
+                  <li key={p.id} className="flex items-center justify-between gap-2 text-sm">
+                    <Link href={`/projects/${p.id}`} className="text-info hover:underline">
+                      {p.name}
+                    </Link>
+                    <span className="text-xs text-muted-foreground">{p.pmId === e.id ? 'Project manager' : p.sponsorId === e.id ? 'Sponsor' : p.members.find((m) => m.personId === e.id)?.role}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground">Not on any project.</p>
+            )}
+          </Panel>
+        </div>
+
+        <aside className="flex flex-col gap-4">
+          <Panel title="Work profile">
+            <div className="flex flex-col gap-3">
+              <KV label="Status"><StatusPill status={e.status} /></KV>
+              <KV label="Department"><DeptTag id={e.dept} /></KV>
+              <KV label="Email"><a href={`mailto:${e.email}`} className="text-info hover:underline">{e.email}</a></KV>
+              <KV label="Location">{e.location}</KV>
+              <KV label="Joined">{e.joined}</KV>
+              <KV label="Access">{accessRoleLabel[e.accessRole]}</KV>
+            </div>
+          </Panel>
+          <Panel title="Reporting lines">
+            <div className="flex flex-col gap-3">
+              {outgoing.length ? (
+                outgoing.map((r) => (
+                  <KV key={r.id} label={relLabel[r.type]}>
+                    <PersonLink id={r.to} showRole />
+                  </KV>
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">Top of the organization.</p>
+              )}
+              {reports.length > 0 && (
+                <KV label={`Direct reports · ${reports.length}`}>
+                  <span className="flex flex-col gap-1">
+                    {reports.map((r) => (
+                      <PersonLink key={r} id={r} />
+                    ))}
+                  </span>
+                </KV>
+              )}
+            </div>
+          </Panel>
+          {(isSelf || isManagerOf || can('manage')) && (
+            <Panel title={`Delivery · this period`}>
+              <div className="flex flex-col gap-2 text-sm text-muted-foreground">
+                <span>
+                  <span className="font-mono text-foreground">{prod.accepted.length}</span> of {prod.commitments.length} commitments accepted
+                </span>
+                <span>
+                  <span className="font-mono text-foreground">{prod.onTime.length}</span> on time · {prod.late.length} late · {prod.revised.length} revised
+                </span>
+                <Link href={`/productivity?person=${e.id}`} className="text-info hover:underline">
+                  Open productivity
+                </Link>
+              </div>
+            </Panel>
+          )}
+          <Panel title="Personal details">
+            {seePersonal ? (
+              <div className="flex flex-col gap-3">
+                <KV label="Phone">{e.phone ?? '—'}</KV>
+                <KV label="Date of birth">{e.dob ?? '—'}</KV>
+                <KV label="Emergency contact">{e.emergency ?? '—'}</KV>
               </div>
             ) : (
-              <p className="p-4 text-sm text-muted-foreground">Not enough accepted activity evidence to compare yet.</p>
+              <Callout tone="muted" title="Restricted" icon={<Lock className="size-4" />}>
+                Visible only to this person and HR.
+              </Callout>
             )}
           </Panel>
-        </TabsContent>
+        </aside>
+      </div>
 
-        <TabsContent value="activities">
-          <Panel title="Activities" description="Same canonical records shown in projects, departments and the dossier.">
-            <ActivityTable filter={(a) => a.ownerId === id} caption={`Activities owned by ${e.fullName}`} />
-          </Panel>
-        </TabsContent>
-
-        <TabsContent value="projects">
-          <Panel title="Projects">
-            <ul className="divide-y divide-border">
-              {myProjects.map((p) => (
-                <li key={p.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
-                  <IdChip href={`/projects/${p.id}`}>{p.id}</IdChip>
-                  <Link className="font-medium text-foreground hover:underline" href={`/projects/${p.id}`}>
-                    {p.name}
-                  </Link>
-                  <span className="text-xs text-muted-foreground">{p.pmId === id ? 'Project manager' : 'Member'}</span>
-                  <StatusPill status={p.health} className="ml-auto" />
-                </li>
-              ))}
-              {myProjects.length === 0 && <li className="px-4 py-3 text-sm text-muted-foreground">Not on any project.</li>}
-            </ul>
-          </Panel>
-        </TabsContent>
-
-        {isSelf && (
-          <TabsContent value="mail">
-            <Callout tone="info" title="Your mailbox stays private" icon={<Mail className="size-4" />}>
-              Only you can open your connected mailbox. Administrators, managers, finance and AI on behalf of others cannot.{' '}
-              <Link href="/mail" className="font-medium underline">
-                Open My Mail
-              </Link>
-            </Callout>
-          </TabsContent>
-        )}
-      </Tabs>
-    </div>
+      <FormSheet open={open} onOpenChange={setOpen} title={`Assign responsibility to ${e.fullName}`} onSubmit={addResp} submitLabel="Assign">
+        <Field label="Title" required error={f.errors.title}>
+          <TextInput value={f.values.title} onChange={(ev) => f.set('title', ev.target.value)} invalid={!!f.errors.title} />
+        </Field>
+        <Field label="Description" required error={f.errors.description}>
+          <TextArea value={f.values.description} onChange={(ev) => f.set('description', ev.target.value)} invalid={!!f.errors.description} />
+        </Field>
+        <Field label="Scope" required error={f.errors.scope} hint="e.g. a product, department or process">
+          <TextInput value={f.values.scope} onChange={(ev) => f.set('scope', ev.target.value)} invalid={!!f.errors.scope} />
+        </Field>
+      </FormSheet>
+    </Page>
   )
 }
