@@ -1,12 +1,14 @@
 'use client'
 
 import { Brand } from '@/components/shell/app-shell'
+import { LanguageSwitcher } from '@/components/shell/language-switcher'
 
 export function AuthFrame({ title, description, children, aside }: { title: string; description?: React.ReactNode; children: React.ReactNode; aside?: React.ReactNode }) {
   return (
     <div className="flex min-h-dvh flex-col bg-background">
-      <header className="mx-auto flex w-full max-w-5xl items-center px-4 py-4 md:px-6">
+      <header className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 px-4 py-4 md:px-6">
         <Brand />
+        <LanguageSwitcher />
       </header>
       <main className="mx-auto grid w-full max-w-5xl flex-1 gap-8 px-4 pb-12 md:px-6 lg:grid-cols-[1fr_340px]">
         <section className="flex flex-col gap-5 rounded-xl border border-border bg-card p-5 md:p-8">

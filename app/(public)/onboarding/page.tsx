@@ -6,6 +6,7 @@ import { Check, Plus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Brand } from '@/components/shell/app-shell'
+import { LanguageSwitcher } from '@/components/shell/language-switcher'
 import { Field, Select, TextInput } from '@/components/hub/form'
 import { Callout } from '@/components/hub/primitives'
 import { OrgCanvas } from '@/components/org/org-canvas'
@@ -65,7 +66,10 @@ export default function OnboardingPage() {
     <div className="flex min-h-dvh flex-col bg-background">
       <header className="flex items-center justify-between gap-4 border-b border-border bg-card px-4 py-3 md:px-6">
         <Brand />
-        <span className="text-sm text-muted-foreground">Setting up {c.name}</span>
+        <div className="flex items-center gap-3">
+          <span className="hidden text-sm text-muted-foreground sm:inline">Setting up {c.name}</span>
+          <LanguageSwitcher />
+        </div>
       </header>
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-6 md:px-6 lg:flex-row">
         <ol aria-label="Setup steps" className="flex shrink-0 gap-2 overflow-x-auto lg:w-56 lg:flex-col">

@@ -6,6 +6,7 @@ import { buttonVariants } from '@/components/ui/button'
 import { packages, fmtEUR } from '@/lib/fixtures'
 import { useStore } from '@/lib/store'
 import { Brand } from '@/components/shell/app-shell'
+import { LanguageSwitcher } from '@/components/shell/language-switcher'
 import { cn } from '@/lib/utils'
 
 const trail = [
@@ -30,6 +31,7 @@ export function Landing() {
       <header className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-4 py-4 md:px-6">
         <Brand />
         <nav aria-label="Account" className="flex items-center gap-2">
+          <LanguageSwitcher />
           <Link href="#pricing" className={buttonVariants({ variant: 'ghost', size: 'sm' })}>
             Pricing
           </Link>

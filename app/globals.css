@@ -111,6 +111,10 @@
   --sidebar-ring: oklch(0.55 0.1 255);
 }
 
+html[data-i18n-loading] body {
+  visibility: hidden;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

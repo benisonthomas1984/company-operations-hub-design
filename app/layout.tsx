@@ -3,6 +3,7 @@ import type { Metadata, Viewport } from 'next'
 import { IBM_Plex_Sans, IBM_Plex_Mono } from 'next/font/google'
 import { Toaster } from '@/components/ui/sonner'
 import { AppStoreProvider } from '@/lib/store'
+import { I18nProvider, i18nBootScript } from '@/lib/i18n'
 import './globals.css'
 
 const _plexSans = IBM_Plex_Sans({ subsets: ['latin'], weight: ['400', '500', '600', '700'] })
@@ -21,10 +22,15 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className="bg-background">
+    <html lang="en" className="bg-background" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: i18nBootScript }} />
+      </head>
       <body className="font-sans antialiased">
-        <AppStoreProvider>{children}</AppStoreProvider>
-        <Toaster position="bottom-right" />
+        <I18nProvider>
+          <AppStoreProvider>{children}</AppStoreProvider>
+          <Toaster position="bottom-right" />
+        </I18nProvider>
         {process.env.NODE_ENV === 'production' && <Analytics />}
       </body>
     </html>
