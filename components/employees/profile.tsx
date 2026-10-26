@@ -2,16 +2,18 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
-import { Lock, Plus, X } from 'lucide-react'
+import { Lock, Pencil, Plus, X } from 'lucide-react'
 import { toast } from 'sonner'
-import { accessRoleLabel, fmtEUR, goalStatuses, relLabel, TODAY, type GoalStatus } from '@/lib/fixtures'
+import { accessRoleLabel, fmtEUR, goalStatuses, PERIOD, relLabel, TODAY, type GoalStatus } from '@/lib/fixtures'
+import { EmployeeFormSheet } from '@/components/employees/add-employee'
+import { ProductivityEvidence } from '@/components/personal/productivity'
 import { useHub } from '@/lib/store'
 import { directReports, empOf, personAllocation, productivity } from '@/lib/derive'
 import { Button } from '@/components/ui/button'
 import { Avatar, Callout, DeptTag, KV, Panel, PersonLink, StatusPill } from '@/components/hub/primitives'
 import { Page, StateBlock } from '@/components/hub/page'
 import { ActivityTable } from '@/components/activities/activity-table'
-import { Field, Select, TabBar, TextInput } from '@/components/hub/form'
+import { Field, Select, TabBar, TextInput, useParam } from '@/components/hub/form'
 
 const goalTone: Record<GoalStatus, string> = {
   'On track': 'bg-info',
@@ -23,7 +25,8 @@ const goalTone: Record<GoalStatus, string> = {
 export function EmployeeProfile({ id }: { id: string }) {
   const { company: c, me, can } = useHub()
   const e = empOf(c, id)
-  const [tab, setTab] = useState('overview')
+  const [tab, setTab] = useParam('tab', 'overview')
+  const [editing, setEditing] = useState(false)
 
   if (!e || e.status === 'vacancy')
     return (
@@ -38,6 +41,9 @@ export function EmployeeProfile({ id }: { id: string }) {
   const canSeePay = isSelf || isManagerOf || can('org.edit')
   const alloc = personAllocation(c, e.id)
   const goals = e.goals ?? []
+  const canEditProfile = can('org.edit')
+  const canSeeProductivity = isSelf || isManagerOf || can('manage')
+  const prod = productivity(c, e.id)
 
   return (
     <Page
@@ -52,11 +58,14 @@ export function EmployeeProfile({ id }: { id: string }) {
       }
       crumbs={[{ label: 'Employees', href: '/employees' }]}
       actions={
-        <Link href={`/activities?owner=${e.id}`} className="text-sm font-medium text-info hover:underline">
-          View activities
-        </Link>
+        canEditProfile && (
+          <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+            <Pencil aria-hidden /> Edit profile
+          </Button>
+        )
       }
     >
+      {canEditProfile && <EmployeeFormSheet key={editing ? 'open' : 'closed'} open={editing} onOpenChange={setEditing} employeeId={e.id} />}
       <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
         <div className="flex min-w-0 flex-col gap-4">
           <TabBar
@@ -66,11 +75,23 @@ export function EmployeeProfile({ id }: { id: string }) {
             tabs={[
               { id: 'overview', label: 'Overview' },
               { id: 'review', label: 'Performance review', count: goals.length },
+              ...(canSeeProductivity ? [{ id: 'productivity', label: 'Productivity', count: prod.commitments.length }] : []),
               ...(canSeePay ? [{ id: 'value', label: 'Time & cost', count: alloc.rows.filter((r) => !r.former).length }] : []),
               { id: 'activities', label: 'Activities' },
             ]}
           />
           {tab === 'overview' && <Overview id={e.id} canAssign={canAssign} />}
+          {tab === 'productivity' && canSeeProductivity && (
+            <>
+              <Panel title={`Delivery in ${PERIOD.label}`} description={`The current review period is the calendar month of ${PERIOD.label}. A "commitment" is any activity owned by ${e.fullName} with a due date in that month that was not cancelled. Click a box to see the activities behind the number.`}>
+                <p className="text-sm leading-relaxed text-foreground">
+                  <span className="font-mono">{prod.accepted.length}</span> of <span className="font-mono">{prod.commitments.length}</span> commitments accepted so far —{' '}
+                  <span className="font-mono">{prod.onTime.length}</span> on time, <span className="font-mono">{prod.late.length}</span> late, <span className="font-mono">{prod.submitted.length}</span> waiting for review.
+                </p>
+              </Panel>
+              <ProductivityEvidence personId={e.id} self={isSelf} />
+            </>
+          )}
           {tab === 'review' && <Review id={e.id} canEdit={canAssign} canSee={canSeePay || can('manage')} />}
           {tab === 'value' && canSeePay && <TimeValue id={e.id} />}
           {tab === 'activities' && (
@@ -346,14 +367,29 @@ function TimeValue({ id }: { id: string }) {
 
   return (
     <>
-      <Panel title="Where the monthly salary goes" description={`${fmtEUR(a.monthly)} a month (${fmtEUR(a.salary)} a year ÷ 12), split by allocation % on each project.`}>
+      <Panel title="How this salary is charged each month" description="Each project pays for the share of working time this person spends on it. Whatever is left is charged to their department.">
         <div className="flex flex-col gap-4">
+          <p className="rounded-md bg-muted px-3 py-2 text-sm leading-relaxed text-foreground">
+            {fmtEUR(a.salary)} a year ÷ 12 = <span className="font-mono">{fmtEUR(a.monthly)}</span> a month.
+            {active[0] && (
+              <>
+                {' '}Example: {active[0].allocation}% of the time on {active[0].project.name} → {active[0].allocation}% × {fmtEUR(a.monthly)} = <span className="font-mono">{fmtEUR(active[0].monthlyValue)}</span> charged to that project every month.
+              </>
+            )}
+          </p>
           <div className="flex h-3 w-full overflow-hidden rounded-full bg-muted" role="img" aria-label={`${a.allocated}% allocated to projects, ${a.unallocated}% unallocated`}>
             {active.map((r, i) => (
               <span key={r.project.id} className={i % 2 ? 'bg-primary/60' : 'bg-primary'} style={{ width: `${Math.min(r.allocation, 100)}%` }} title={`${r.project.name} · ${r.allocation}%`} />
             ))}
           </div>
           <ul className="flex flex-col divide-y divide-border text-sm">
+            <li aria-hidden className="flex items-center justify-between gap-3 pb-1 text-xs text-muted-foreground">
+              <span>Charged to</span>
+              <span className="flex items-center gap-4">
+                <span>Time</span>
+                <span className="w-20 text-right">Per month</span>
+              </span>
+            </li>
             {active.map((r) => (
               <li key={r.project.id} className="flex items-center justify-between gap-3 py-2">
                 <Link href={`/projects/${r.project.id}?tab=budget`} className="min-w-0 truncate text-info hover:underline">{r.project.name}</Link>
@@ -364,7 +400,7 @@ function TimeValue({ id }: { id: string }) {
               </li>
             ))}
             <li className="flex items-center justify-between gap-3 py-2">
-              <span className="text-muted-foreground">Not allocated to a project</span>
+              <span className="text-muted-foreground">Department work (not on a project)</span>
               <span className="flex items-center gap-4 text-xs text-muted-foreground">
                 <span className="font-mono">{a.unallocated}%</span>
                 <span className={`w-20 text-right font-mono ${a.unallocated > 0 ? 'text-warning' : 'text-foreground'}`}>{fmtEUR(a.unallocatedMonthly)}</span>
@@ -457,15 +493,6 @@ function Sidebar({ id, canSeePay }: { id: string; canSeePay: boolean }) {
           )}
         </div>
       </Panel>
-      {(isSelf || isManagerOf || can('manage')) && (
-        <Panel title="Delivery · this period">
-          <div className="flex flex-col gap-2 text-sm text-muted-foreground">
-            <span><span className="font-mono text-foreground">{prod.accepted.length}</span> of {prod.commitments.length} commitments accepted</span>
-            <span><span className="font-mono text-foreground">{prod.onTime.length}</span> on time · {prod.late.length} late · {prod.revised.length} revised</span>
-            <Link href={`/productivity?person=${id}`} className="text-info hover:underline">Open productivity</Link>
-          </div>
-        </Panel>
-      )}
       <Panel title="Personal details">
         {seePersonal ? (
           <div className="flex flex-col gap-3">

@@ -34,6 +34,10 @@ export function Productivity() {
   )
 }
 
+export function ProductivityEvidence({ personId, self }: { personId: string; self: boolean }) {
+  return <Evidence personId={personId} self={self} />
+}
+
 function Evidence({ personId, self }: { personId: string; self: boolean }) {
   const { company: c, me, mutate } = useHub()
   const p = productivity(c, personId)

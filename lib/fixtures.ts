@@ -420,9 +420,14 @@ export type DecisionRecord = { id: string; ctx: string; title: string; text: str
 export type Announcement = {
   id: string
   title: string
+  /** Plain text, or sanitized-on-render HTML when `html` is true. */
   body: string
+  html?: boolean
   audience: { type: 'all' | 'depts'; deptIds: DeptId[] }
   image?: string
+  /** People who opened the announcement, with when they first saw it. */
+  seen?: { id: string; at: string }[]
+  ackAt?: Record<string, string>
   attachments: string[]
   video?: string
   senderId: string
