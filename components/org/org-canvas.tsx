@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ExternalLink, Minus, Network, Plus, Trash2, UserPlus } from 'lucide-react'
+import { ExternalLink, Minus, Network, Plus, SlidersHorizontal, Trash2, UserPlus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { useHub } from '@/lib/store'
@@ -36,6 +36,9 @@ export function OrgCanvas({ compact = false, fullscreen = false }: { compact?: b
   const maxY = Math.max(420, ...people.map((p) => posOf(p.id).y + CARD_H + 60))
   const rels = c.relationships.filter((r) => showTypes[r.type] && people.some((p) => p.id === r.from) && people.some((p) => p.id === r.to))
   const sel = people.find((p) => p.id === selId)
+  const [toolsOpen, setToolsOpen] = useState(false)
+  const showToolbar = !fullscreen || toolsOpen
+  const showPanel = !fullscreen || !!sel
 
   const toCanvas = (e: React.PointerEvent) => {
     const rect = svgRef.current!.getBoundingClientRect()
@@ -112,6 +115,7 @@ export function OrgCanvas({ compact = false, fullscreen = false }: { compact?: b
         !fullscreen && (compact ? 'h-[600px]' : 'h-[calc(100dvh-14rem)] min-h-[560px]'),
       )}
     >
+      {showToolbar && (
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         {!fullscreen && (
           <a
@@ -165,8 +169,20 @@ export function OrgCanvas({ compact = false, fullscreen = false }: { compact?: b
           </div>
         )}
       </div>
+      )}
 
-      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+      <div className="relative flex min-h-0 flex-1 flex-col lg:flex-row">
+        {fullscreen && (
+          <Button
+            size="sm"
+            variant={toolsOpen ? 'secondary' : 'outline'}
+            className="absolute bottom-4 left-4 z-10 bg-card shadow-sm"
+            onClick={() => setToolsOpen((o) => !o)}
+            aria-expanded={toolsOpen}
+          >
+            <SlidersHorizontal /> {toolsOpen ? 'Hide tools' : 'Show tools'}
+          </Button>
+        )}
         <div className="min-h-72 flex-1 overflow-auto bg-muted/40 [background-image:radial-gradient(var(--border)_1px,transparent_1px)] [background-size:20px_20px]" onClick={(e) => e.target === e.currentTarget && setSelId(null)}>
           <svg
             ref={svgRef}
@@ -239,7 +255,26 @@ export function OrgCanvas({ compact = false, fullscreen = false }: { compact?: b
           </svg>
         </div>
 
-        <aside aria-label="Selected position" className="flex w-full shrink-0 flex-col gap-4 overflow-y-auto border-t border-border p-4 lg:w-80 lg:border-l lg:border-t-0">
+        {showPanel && (
+        <aside
+          aria-label="Selected position"
+          className={cn(
+            'flex shrink-0 flex-col gap-4 overflow-y-auto bg-card p-4',
+            fullscreen
+              ? 'absolute inset-y-0 right-0 z-20 w-full max-w-sm border-l border-border shadow-lg'
+              : 'w-full border-t border-border lg:w-80 lg:border-l lg:border-t-0',
+          )}
+        >
+          {fullscreen && (
+            <button
+              type="button"
+              onClick={() => setSelId(null)}
+              className="-mb-2 self-end rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Close position details"
+            >
+              <X className="size-4" />
+            </button>
+          )}
           {sel ? (
             <SelectedPanel key={sel.id} p={sel} canEdit={canEdit} onFocus={setSelId} />
           ) : (
@@ -249,6 +284,7 @@ export function OrgCanvas({ compact = false, fullscreen = false }: { compact?: b
             </p>
           )}
         </aside>
+        )}
       </div>
     </div>
   )
