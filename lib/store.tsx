@@ -136,6 +136,33 @@ function applyOutcome(c: CompanyData, r: ApprovalRound, now: string) {
     }
     if (r.status !== 'Pending' && r.status !== 'Approved') p.stages[idx].approvalId = undefined
   }
+  if (r.itemType === 'Project change') {
+    const p = c.projects.find((x) => x.id === r.itemId)
+    const ch = p?.pendingChange
+    if (!p || !ch || ch.approvalId !== r.id || r.status === 'Pending') return
+    if (r.status === 'Approved') {
+      const parts: string[] = []
+      if (ch.budget !== undefined) parts.push(`budget ${p.budget ?? 0} → ${ch.budget}`), (p.budget = ch.budget)
+      if (ch.target) parts.push(`target ${p.target} → ${ch.target}`), (p.target = ch.target)
+      p.history.unshift({ at: now, by: 'system', text: `Change approved (${r.id}): ${parts.join(', ')}` })
+    } else {
+      p.history.unshift({ at: now, by: 'system', text: `Change ${r.status.toLowerCase()} (${r.id}) — budget and target unchanged` })
+    }
+    p.pendingChange = undefined
+  }
+  if (r.itemType === 'Department budget') {
+    const d = c.departments.find((x) => x.id === r.itemId)
+    const ch = d?.pendingBudget
+    if (!d || !ch || ch.approvalId !== r.id || r.status === 'Pending') return
+    d.history ??= []
+    if (r.status === 'Approved') {
+      d.history.unshift({ at: now, by: 'system', text: `Budget change approved (${r.id}): ${d.budget ?? 0} → ${ch.budget}` })
+      d.budget = ch.budget
+    } else {
+      d.history.unshift({ at: now, by: 'system', text: `Budget change ${r.status.toLowerCase()} (${r.id})` })
+    }
+    d.pendingBudget = undefined
+  }
   if (r.itemType === 'Release') {
     const rel = c.releases.find((x) => x.id === r.itemId)
     if (!rel) return

@@ -134,7 +134,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             </DropdownMenuContent>
           </DropdownMenu>
         </header>
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        {/* relative: absolutely-positioned descendants (e.g. sr-only labels) must stay inside this scroller, not stretch the document */}
+        <main className="relative flex-1 overflow-y-auto">{children}</main>
       </div>
     </div>
   )

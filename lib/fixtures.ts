@@ -23,7 +23,20 @@ export const deptColorCls: Record<DeptColor, { text: string; bg: string; border:
 
 export type DeptId = string
 
-export type Department = { id: DeptId; name: string; leadId: string | null; color: DeptColor; isDepartment: boolean; purpose?: string; budget?: number; history?: { at: string; by: string; text: string }[] }
+export type Department = {
+  id: DeptId
+  name: string
+  leadId: string | null
+  color: DeptColor
+  isDepartment: boolean
+  purpose?: string
+  /** Annual department budget in EUR (people + department-only expenses). */
+  budget?: number
+  /** budget: approve budget changes and department expenses. work: default reviewers of department-only activities. Empty = department lead. */
+  approvers?: { budget: string[]; work: string[] }
+  pendingBudget?: { approvalId: string; budget: number; reason: string; by: string; at: string }
+  history?: { at: string; by: string; text: string }[]
+}
 
 export type AccessRole = 'owner' | 'admin' | 'finance' | 'hr' | 'manager' | 'member'
 export const accessRoleLabel: Record<AccessRole, string> = {
@@ -141,6 +154,9 @@ export type Project = {
   target: string
   deliverables: string[]
   budget?: number
+  /** budget: approve budget changes and project expenses. timeline: approve target date changes. Empty = sponsor. */
+  approvers?: { budget: string[]; timeline: string[] }
+  pendingChange?: { approvalId: string; budget?: number; target?: string; reason: string; by: string; at: string }
   stages: ProjectStage[]
   healthOverride?: { value: 'On track' | 'At risk' | 'Blocked'; reason: string; by: string; at: string }
   history: { at: string; by: string; text: string }[]
@@ -218,7 +234,7 @@ export type Release = {
 
 export type Decision = 'approved' | 'pending' | 'changes' | 'rejected' | 'inactive' | 'blocked'
 export type ApprovalStage = { name: string; mode: 'Concurrent ALL' | 'Ordered stage'; decisions: { personId: string; decision: Decision; at?: string; note?: string }[] }
-export type ApprovalType = 'Proposal' | 'Backlog item' | 'Expense' | 'Project stage' | 'Activity acceptance' | 'Release' | 'Complaint resolution'
+export type ApprovalType = 'Proposal' | 'Backlog item' | 'Expense' | 'Project stage' | 'Project change' | 'Department budget' | 'Activity acceptance' | 'Release' | 'Complaint resolution'
 
 export type ApprovalRound = {
   id: string

@@ -4,13 +4,13 @@ import Link from 'next/link'
 import { useState } from 'react'
 import { ArrowDown, ArrowUp, Check, Pencil, Plus, Receipt, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
-import type { Expense, ExpenseCategory, Project } from '@/lib/fixtures'
+import type { Project } from '@/lib/fixtures'
 import { fmtEUR, TODAY } from '@/lib/fixtures'
 import { useHub } from '@/lib/store'
-import { empOf, productOf, projectCost, projectHealth, projectOf } from '@/lib/derive'
+import { empOf, productOf, projectApprovers, projectCost, projectHealth, projectOf } from '@/lib/derive'
 import { Conversation, DecisionsPanel, EmptyLine, FilesPanel, HistoryList, MeetingsPanel, TabHeader } from '@/components/workspace/collab'
+import { ExpenseSheet, useNames } from '@/components/workspace/expense-sheet'
 import { buildRound } from '@/components/approvals/approvals'
-import { APPROVAL_THRESHOLD, categories } from '@/components/finance/finance'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
@@ -123,6 +123,11 @@ function ProjectSummary({ p }: { p: Project }) {
   const pct = acts.length ? Math.round((accepted / acts.length) * 100) : 0
   const h = projectHealth(c, p)
   const spend = projectCost(c, p).toDate
+  const appr = projectApprovers(p)
+  const budgetNames = useNames(appr.budget)
+  const timelineNames = useNames(appr.timeline)
+  const dept = c.departments.find((d) => d.id === p.ownerDept)
+  const ch = p.pendingChange
 
   return (
     <section aria-label="Project summary" className="flex flex-col gap-4 rounded-lg border border-border bg-card p-4">
@@ -131,8 +136,16 @@ function ProjectSummary({ p }: { p: Project }) {
           <StatusPill status={p.status} />
           <StatusPill status={h.value} tone={healthTone[h.value as keyof typeof healthTone] ?? 'muted'} />
         </span>
+        <Fact label="Department">
+          {dept ? <Link href={`/departments?dept=${dept.id}`} className="text-info hover:underline">{dept.name}</Link> : 'None'}
+          {p.deptIds.filter((d) => d !== p.ownerDept).length > 0 && (
+            <span className="text-muted-foreground"> + {p.deptIds.filter((d) => d !== p.ownerDept).map((d) => c.departments.find((x) => x.id === d)?.name ?? d).join(', ')}</span>
+          )}
+        </Fact>
         <Fact label="Project manager"><PersonLink id={p.pmId} /></Fact>
         <Fact label="Sponsor"><PersonLink id={p.sponsorId} /></Fact>
+        <Fact label="Budget approval">{budgetNames || '—'}</Fact>
+        <Fact label="Timeline approval">{timelineNames || '—'}</Fact>
         <Fact label="Target">{p.target}</Fact>
         {p.budget !== undefined && <Fact label="Cost to date">{fmtEUR(spend)} of {fmtEUR(p.budget)}</Fact>}
         {p.productIds.length > 0 && (
@@ -163,6 +176,13 @@ function ProjectSummary({ p }: { p: Project }) {
             </li>
           ))}
         </ol>
+      )}
+      {ch && (
+        <p className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs leading-relaxed text-foreground">
+          <span className="font-medium">Change awaiting approval:</span>{' '}
+          {[ch.budget !== undefined && `budget ${fmtEUR(p.budget ?? 0)} → ${fmtEUR(ch.budget)}`, ch.target && `target ${p.target} → ${ch.target}`].filter(Boolean).join(', ')} — requested by {empOf(c, ch.by)?.fullName ?? ch.by}: {'"'}{ch.reason}{'"'}.{' '}
+          <Link href={`/approvals?id=${ch.approvalId}`} className="text-info hover:underline">Open approval</Link>
+        </p>
       )}
       {h.value !== 'On track' && h.reasons.length > 0 && (
         <p className="text-xs leading-relaxed text-muted-foreground">
@@ -446,7 +466,19 @@ function BudgetTab({ p, canEdit }: { p: Project; canEdit: boolean }) {
           <EmptyLine icon={<Receipt className="size-5" aria-hidden />} text="No expenses charged to this project yet." />
         )}
       </section>
-      {canEdit && <ProjectExpenseSheet p={p} open={open} onOpenChange={setOpen} />}
+      {canEdit && (
+        <ExpenseSheet
+          open={open}
+          onOpenChange={setOpen}
+          target={{
+            dept: p.ownerDept,
+            projectId: p.id,
+            label: p.name,
+            approverIds: projectApprovers(p).budget,
+            log: (c2, at, by, text) => c2.projects.find((x) => x.id === p.id)?.history.unshift({ at, by, text }),
+          }}
+        />
+      )}
     </div>
   )
 }
@@ -458,71 +490,6 @@ function Stat({ label, value, sub, tone }: { label: string; value: string; sub?:
       <dd className={cn('text-lg font-semibold tabular-nums text-foreground', tone === 'danger' && 'text-destructive', tone === 'success' && 'text-success')}>{value}</dd>
       {sub && <dd className="text-xs text-muted-foreground">{sub}</dd>}
     </div>
-  )
-}
-
-function ProjectExpenseSheet({ p, open, onOpenChange }: { p: Project; open: boolean; onOpenChange: (o: boolean) => void }) {
-  const { company: c, mutate } = useHub()
-  const f = useForm({ description: '', payee: '', category: 'Tools & software', amount: '' })
-  const owner = c.employees.find((e) => e.accessRole === 'owner')
-  const submit = () => {
-    const ok = f.validate({
-      description: required('Description'),
-      payee: required('Payee'),
-      amount: (v: string) => (!(Number(v) > 0) ? 'Enter an amount greater than zero' : undefined),
-    })
-    if (!ok) return
-    const amount = Math.round(Number(f.values.amount) * 100) / 100
-    const needsApproval = amount >= APPROVAL_THRESHOLD
-    mutate((c2, ctx) => {
-      const id = ctx.id('EXP')
-      const wf = c2.workflows.find((w) => w.appliesTo === 'Expense')
-      const approverIds = wf?.stages.flatMap((s) => s.approverIds) ?? (owner ? [owner.id] : [])
-      const exp: Expense = {
-        id,
-        description: f.values.description,
-        payee: f.values.payee,
-        category: f.values.category as ExpenseCategory,
-        amount,
-        currency: 'EUR',
-        date: TODAY,
-        dept: p.ownerDept,
-        projectId: p.id,
-        allocations: [],
-        approvalRequired: needsApproval,
-        status: needsApproval ? 'Submitted' : 'Approved · unpaid',
-        submittedBy: ctx.me.id,
-        source: 'Manual entry',
-        history: [{ at: ctx.now, by: ctx.me.id, text: needsApproval ? 'Submitted for approval' : `Auto-approved (under ${fmtEUR(APPROVAL_THRESHOLD)})` }],
-      }
-      if (needsApproval) {
-        const rid = ctx.id('APR')
-        buildRound(c2, { id: rid, itemType: 'Expense', itemId: id, itemTitle: exp.description, revision: 'r1', approverIds, submittedBy: ctx.me.id, now: ctx.now, summary: `${exp.payee} · ${fmtEUR(amount)}`, amount })
-        exp.approvalId = rid
-      }
-      c2.expenses.unshift(exp)
-      c2.projects.find((x) => x.id === p.id)?.history.unshift({ at: ctx.now, by: ctx.me.id, text: `Expense added: ${exp.description} (${fmtEUR(amount)})` })
-      ctx.audit('expense.submit', id, fmtEUR(amount))
-    })
-    toast.success(needsApproval ? 'Expense submitted for approval' : 'Expense recorded')
-    f.reset()
-    onOpenChange(false)
-  }
-  return (
-    <FormSheet open={open} onOpenChange={onOpenChange} title="Add project expense" description={`Charged to ${p.name}. ${fmtEUR(APPROVAL_THRESHOLD)} or more goes to approval first.`} onSubmit={submit} submitLabel="Add expense">
-      <Field label="Description" required error={f.errors.description}>
-        <TextInput value={f.values.description} onChange={(e) => f.set('description', e.target.value)} invalid={!!f.errors.description} placeholder="e.g. Usability test incentives" />
-      </Field>
-      <Field label="Payee" required error={f.errors.payee}>
-        <TextInput value={f.values.payee} onChange={(e) => f.set('payee', e.target.value)} invalid={!!f.errors.payee} />
-      </Field>
-      <Field label="Amount (EUR)" required error={f.errors.amount}>
-        <TextInput type="number" inputMode="decimal" min="0" step="0.01" value={f.values.amount} onChange={(e) => f.set('amount', e.target.value)} invalid={!!f.errors.amount} />
-      </Field>
-      <Field label="Category">
-        <Select value={f.values.category} onChange={(e) => f.set('category', e.target.value)} options={categories.map((x) => ({ value: x, label: x }))} />
-      </Field>
-    </FormSheet>
   )
 }
 
@@ -664,41 +631,123 @@ function StageSheet({ p, index, onClose }: { p: Project; index: number | null; o
 /* ——— Edit details ——— */
 
 function EditProject({ p, open, onOpenChange }: { p: Project; open: boolean; onOpenChange: (o: boolean) => void }) {
-  const edit = useProjectEditor(p.id)
+  const { company: c, me, can, mutate } = useHub()
   const people = usePeopleOptions()
-  const f = useForm({ name: p.name, purpose: p.purpose, pmId: p.pmId, sponsorId: p.sponsorId, target: p.target, status: p.status as string })
+  const current = projectApprovers(p)
+  const canSetApprovers = can('manage')
+  const f = useForm({
+    name: p.name,
+    purpose: p.purpose,
+    pmId: p.pmId,
+    sponsorId: p.sponsorId,
+    target: p.target,
+    status: p.status as string,
+    budget: p.budget !== undefined ? String(p.budget) : '',
+    budgetApprovers: current.budget,
+    timelineApprovers: current.timeline,
+    reason: '',
+  })
+  const v = f.values
+  const newBudget = v.budget.trim() === '' ? undefined : Math.round(Number(v.budget))
+  const budgetChanged = newBudget !== p.budget
+  const targetChanged = v.target !== p.target
+  // Changes are approved by the approvers on file when the request is made, so editing the approver list can't self-approve.
+  const needed = Array.from(new Set([...(budgetChanged ? current.budget : []), ...(targetChanged ? current.timeline : [])]))
+  const selfApproves = needed.every((id) => id === me.id)
+  const needsApproval = needed.length > 0 && !selfApproves
+
   const submit = () => {
-    if (!f.validate({ name: required('Name'), purpose: required('Purpose'), pmId: required('Project manager'), target: required('Target date') })) return
-    edit('Project details updated', (pr) => {
-      Object.assign(pr, { name: f.values.name, purpose: f.values.purpose, pmId: f.values.pmId, sponsorId: f.values.sponsorId, target: f.values.target, status: f.values.status })
-      if (!pr.members.some((m) => m.personId === f.values.pmId)) pr.members.unshift({ personId: f.values.pmId, role: 'Project manager' })
+    const ok = f.validate({
+      name: required('Name'),
+      purpose: required('Purpose'),
+      pmId: required('Project manager'),
+      target: (t) => (!t ? 'Target date is required' : String(t) < p.start ? 'Target cannot be before the start date' : undefined),
+      budget: (b) => (String(b).trim() !== '' && !(Number(b) >= 0) ? 'Enter a valid amount' : undefined),
+      budgetApprovers: (x) => (!(x as string[]).length ? 'Pick at least one budget approver' : undefined),
+      timelineApprovers: (x) => (!(x as string[]).length ? 'Pick at least one timeline approver' : undefined),
+      reason: (r) => (needsApproval && !String(r).trim() ? 'Explain why so approvers can decide' : undefined),
     })
-    toast.success('Project updated')
+    if (!ok) return
+    if (needsApproval && p.pendingChange) {
+      toast.error('A budget/timeline change is already awaiting approval. Wait for that decision first.')
+      return
+    }
+    mutate((c2, ctx) => {
+      const pr = c2.projects.find((x) => x.id === p.id)
+      if (!pr) return
+      Object.assign(pr, { name: v.name, purpose: v.purpose, pmId: v.pmId, sponsorId: v.sponsorId, status: v.status })
+      if (canSetApprovers) pr.approvers = { budget: v.budgetApprovers, timeline: v.timelineApprovers }
+      if (!pr.members.some((m) => m.personId === v.pmId)) pr.members.unshift({ personId: v.pmId, role: 'Project manager', allocation: 100 })
+      pr.history.unshift({ at: ctx.now, by: ctx.me.id, text: 'Project details updated' })
+      if (!budgetChanged && !targetChanged) return
+      if (!needsApproval) {
+        if (budgetChanged) pr.budget = newBudget
+        if (targetChanged) pr.target = v.target
+        pr.history.unshift({ at: ctx.now, by: ctx.me.id, text: `Changed ${[budgetChanged && `budget to ${fmtEUR(newBudget ?? 0)}`, targetChanged && `target to ${v.target}`].filter(Boolean).join(' and ')} (own approval)` })
+        return
+      }
+      const rid = ctx.id('APR')
+      const summary = [budgetChanged && `Budget ${fmtEUR(p.budget ?? 0)} → ${fmtEUR(newBudget ?? 0)}`, targetChanged && `Target ${p.target} → ${v.target}`].filter(Boolean).join(' · ')
+      buildRound(c2, { id: rid, itemType: 'Project change', itemId: pr.id, itemTitle: `${pr.name}: ${summary}`, revision: 'r1', approverIds: needed, submittedBy: ctx.me.id, now: ctx.now, summary: `${summary}. Reason: ${v.reason.trim()}`, amount: budgetChanged ? newBudget : undefined })
+      pr.pendingChange = { approvalId: rid, budget: budgetChanged ? newBudget ?? 0 : undefined, target: targetChanged ? v.target : undefined, reason: v.reason.trim(), by: ctx.me.id, at: ctx.now }
+      pr.history.unshift({ at: ctx.now, by: ctx.me.id, text: `Requested approval (${rid}): ${summary}` })
+      ctx.audit('project.change.request', pr.id, summary)
+    })
+    toast.success(needsApproval ? `Saved. Budget/target change sent to ${needed.map((id) => empOf(c, id)?.fullName ?? id).join(', ')}` : 'Project updated')
     onOpenChange(false)
   }
+
   return (
-    <FormSheet open={open} onOpenChange={onOpenChange} title="Edit project" onSubmit={submit} submitLabel="Save">
+    <FormSheet open={open} onOpenChange={onOpenChange} title="Edit project" onSubmit={submit} submitLabel={needsApproval ? 'Save & request approval' : 'Save'}>
       <Field label="Name" required error={f.errors.name}>
-        <TextInput value={f.values.name} onChange={(e) => f.set('name', e.target.value)} invalid={!!f.errors.name} />
+        <TextInput value={v.name} onChange={(e) => f.set('name', e.target.value)} invalid={!!f.errors.name} />
       </Field>
       <Field label="Purpose" required error={f.errors.purpose}>
-        <TextArea value={f.values.purpose} onChange={(e) => f.set('purpose', e.target.value)} invalid={!!f.errors.purpose} />
+        <TextArea value={v.purpose} onChange={(e) => f.set('purpose', e.target.value)} invalid={!!f.errors.purpose} />
       </Field>
       <div className="grid grid-cols-2 gap-3">
         <Field label="Project manager" required error={f.errors.pmId}>
-          <Select options={people} value={f.values.pmId} onChange={(e) => f.set('pmId', e.target.value)} />
+          <Select options={people} value={v.pmId} onChange={(e) => f.set('pmId', e.target.value)} />
         </Field>
         <Field label="Sponsor">
-          <Select options={people} value={f.values.sponsorId} onChange={(e) => f.set('sponsorId', e.target.value)} />
-        </Field>
-        <Field label="Target date" required error={f.errors.target}>
-          <TextInput type="date" value={f.values.target} onChange={(e) => f.set('target', e.target.value)} />
+          <Select options={people} value={v.sponsorId} onChange={(e) => f.set('sponsorId', e.target.value)} />
         </Field>
         <Field label="Status">
-          <Select options={['Planning', 'Active', 'Closing', 'Closed'].map((s) => ({ value: s, label: s }))} value={f.values.status} onChange={(e) => f.set('status', e.target.value)} />
+          <Select options={['Planning', 'Active', 'Closing', 'Closed'].map((s) => ({ value: s, label: s }))} value={v.status} onChange={(e) => f.set('status', e.target.value)} />
         </Field>
       </div>
+
+      <fieldset className="flex flex-col gap-3 rounded-lg border border-border p-3">
+        <legend className="px-1 text-xs font-medium text-foreground">Budget & timeline</legend>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Budget (EUR)" error={f.errors.budget}>
+            <TextInput type="number" inputMode="numeric" min="0" step="100" value={v.budget} onChange={(e) => f.set('budget', e.target.value)} invalid={!!f.errors.budget} />
+          </Field>
+          <Field label="Target date" required error={f.errors.target}>
+            <TextInput type="date" value={v.target} onChange={(e) => f.set('target', e.target.value)} invalid={!!f.errors.target} />
+          </Field>
+        </div>
+        {needsApproval && (
+          <>
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              This change needs approval from {needed.map((id) => empOf(c, id)?.fullName ?? id).join(', ')}. Until they approve, the current {[budgetChanged && 'budget', targetChanged && 'target'].filter(Boolean).join(' and ')} stays in effect.
+            </p>
+            <Field label="Reason for change" required error={f.errors.reason}>
+              <TextArea value={v.reason} onChange={(e) => f.set('reason', e.target.value)} invalid={!!f.errors.reason} placeholder="e.g. Client added batch upload to scope" />
+            </Field>
+          </>
+        )}
+      </fieldset>
+
+      {canSetApprovers ? (
+        <>
+          <PeoplePicker label="Budget approvers" value={v.budgetApprovers} onChange={(x) => f.set('budgetApprovers', x)} error={f.errors.budgetApprovers} />
+          <PeoplePicker label="Timeline approvers" value={v.timelineApprovers} onChange={(x) => f.set('timelineApprovers', x)} error={f.errors.timelineApprovers} />
+          <p className="text-xs text-muted-foreground">All listed approvers must approve. Budget approvers also approve project expenses of {fmtEUR(500)} or more.</p>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">Approvers can only be changed by a manager or owner.</p>
+      )}
     </FormSheet>
   )
 }
-

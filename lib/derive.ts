@@ -1,4 +1,4 @@
-import { PERIOD, TODAY, ctxKey, type Activity, type ApprovalRound, type CompanyData, type ContextRef, type Employee, type Expense, type Project } from './fixtures'
+import { PERIOD, TODAY, ctxKey, type Activity, type ApprovalRound, type CompanyData, type ContextRef, type Department, type Employee, type Expense, type Project } from './fixtures'
 import { capsFor } from './store'
 
 export const empOf = (c: CompanyData, id?: string | null) => (id ? c.employees.find((e) => e.id === id) : undefined)
@@ -143,6 +143,72 @@ export function deptCosts(c: CompanyData, deptId: string, period = PERIOD.id) {
   return { rows, pending, byCat, total: rows.reduce((s, e) => s + e.amount, 0) }
 }
 
+/** Who approves project budget/timeline changes. Falls back to the sponsor. */
+export function projectApprovers(p: Project) {
+  const fallback = [p.sponsorId].filter(Boolean)
+  return {
+    budget: p.approvers?.budget.length ? p.approvers.budget : fallback,
+    timeline: p.approvers?.timeline.length ? p.approvers.timeline : fallback,
+  }
+}
+
+/** Who approves department budget changes/expenses and reviews department-only work. Falls back to the lead, then the owner. */
+export function deptApprovers(c: CompanyData, d: Department) {
+  const owner = c.employees.find((e) => e.accessRole === 'owner')?.id
+  const fallback = [d.leadId ?? owner].filter(Boolean) as string[]
+  return {
+    budget: d.approvers?.budget.length ? d.approvers.budget : fallback,
+    work: d.approvers?.work.length ? d.approvers.work : fallback,
+  }
+}
+
+export type DeptCostLine = { personId: string; salary?: number; projectAlloc: number; deptShare: number; toDate: number; deptToDate: number; projectToDate: number; deptProjected: number }
+
+/**
+ * Department cost (calendar year) = department people's time NOT allocated to projects
+ * (salary × (100% − project allocation)) + approved expenses charged to the department without a project.
+ * Time people spend on projects is costed on those projects instead, so nothing is counted twice.
+ */
+export function deptCost(c: CompanyData, d: Department) {
+  const year = TODAY.slice(0, 4)
+  const start = `${year}-01-01`
+  const daysToDate = daysBetween(start, TODAY)
+  const daysYear = daysBetween(start, `${year}-12-31`)
+  const openProjects = c.projects.filter((p) => p.status !== 'Closed')
+  const people: DeptCostLine[] = c.employees
+    .filter((e) => e.dept === d.id && e.status === 'active')
+    .map((e) => {
+      const projectAlloc = Math.min(100, openProjects.reduce((s, p) => s + (p.members.find((m) => m.personId === e.id)?.allocation ?? (p.members.some((m) => m.personId === e.id) ? 100 : 0)), 0))
+      const deptShare = 100 - projectAlloc
+      const toDate = Math.round(((e.salary ?? 0) / 365) * daysToDate)
+      const deptToDate = Math.round((toDate * deptShare) / 100)
+      return { personId: e.id, salary: e.salary, projectAlloc, deptShare, toDate, deptToDate, projectToDate: toDate - deptToDate, deptProjected: Math.round((((e.salary ?? 0) / 365) * daysYear * deptShare) / 100) }
+    })
+  const expenses = c.expenses.filter((e) => e.dept === d.id && !e.projectId && e.date.startsWith(year))
+  const expensesTotal = expenses.filter(countable).reduce((s, e) => s + e.amount, 0)
+  const pendingTotal = expenses.filter(pendingExpense).reduce((s, e) => s + e.amount, 0)
+  const peopleToDate = people.reduce((s, l) => s + l.deptToDate, 0)
+  const peopleProjected = people.reduce((s, l) => s + l.deptProjected, 0)
+  const onProjectsToDate = people.reduce((s, l) => s + l.projectToDate, 0)
+  const projects = c.projects
+    .filter((p) => p.ownerDept === d.id || p.deptIds.includes(d.id))
+    .map((p) => ({ project: p, owned: p.ownerDept === d.id, cost: projectCost(c, p) }))
+  return {
+    year,
+    people,
+    expenses,
+    peopleToDate,
+    peopleProjected,
+    expensesTotal,
+    pendingTotal,
+    onProjectsToDate,
+    projects,
+    toDate: peopleToDate + expensesTotal,
+    projected: peopleProjected + expensesTotal + pendingTotal,
+    missingSalary: people.filter((l) => !l.salary).map((l) => l.personId),
+  }
+}
+
 export function sourceHref(r: ApprovalRound) {
   switch (r.itemType) {
     case 'Proposal':
@@ -153,6 +219,10 @@ export function sourceHref(r: ApprovalRound) {
       return `/finance?tab=expenses&id=${r.itemId}`
     case 'Project stage':
       return `/projects/${r.itemId}?tab=workflow`
+    case 'Project change':
+      return `/projects/${r.itemId}`
+    case 'Department budget':
+      return `/departments?dept=${r.itemId}`
     case 'Activity acceptance':
       return `/activities?id=${r.itemId}`
     case 'Release':

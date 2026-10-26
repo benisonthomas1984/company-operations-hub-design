@@ -13,7 +13,7 @@ import { Progress } from '@/components/ui/progress'
 import { ApprovalProgress, Callout, DeptTag, IdChip, KV, Panel, PersonLink, StatusPill } from '@/components/hub/primitives'
 import { Page, StateBlock } from '@/components/hub/page'
 import { ActivityTable } from '@/components/activities/activity-table'
-import { Field, FormSheet, Select, TextArea, TextInput, required, useDeptOptions, usePeopleOptions, useForm } from '@/components/hub/form'
+import { Field, FormSheet, PeoplePicker, Select, TextArea, TextInput, required, useDeptOptions, usePeopleOptions, useForm } from '@/components/hub/form'
 
 const healthTone = { 'On track': 'success', 'At risk': 'warning', Blocked: 'danger' } as const
 
@@ -95,9 +95,14 @@ function NewProject({ open, onOpenChange }: { open: boolean; onOpenChange: (o: b
   const { mutate } = useHub()
   const people = usePeopleOptions()
   const depts = useDeptOptions()
-  const f = useForm({ name: '', purpose: '', pmId: '', sponsorId: '', ownerDept: '', target: '' })
+  const f = useForm({ name: '', purpose: '', pmId: '', sponsorId: '', ownerDept: '', target: '', budget: '', budgetApprovers: [] as string[], timelineApprovers: [] as string[] })
   const submit = () => {
-    const ok = f.validate({ name: required('Name'), purpose: required('Purpose'), pmId: required('Project manager'), sponsorId: required('Sponsor'), ownerDept: required('Owning department'), target: required('Target date') })
+    const ok = f.validate({ name: required('Name'), purpose: required('Purpose'), pmId: required('Project manager'), sponsorId: required('Sponsor'), ownerDept: required('Owning department'),
+      target: (t) => (!t ? 'Target date is required' : String(t) < TODAY ? 'Target cannot be in the past' : undefined),
+      budget: (b) => (!(Number(b) > 0) ? 'Enter the approved budget' : undefined),
+      budgetApprovers: (x) => (!(x as string[]).length ? 'Pick who approves budget changes and expenses' : undefined),
+      timelineApprovers: (x) => (!(x as string[]).length ? 'Pick who approves timeline changes' : undefined),
+    })
     if (!ok) return
     mutate((c, ctx) => {
       const id = ctx.id('PRJ')
@@ -108,7 +113,7 @@ function NewProject({ open, onOpenChange }: { open: boolean; onOpenChange: (o: b
         pmId: f.values.pmId,
         sponsorId: f.values.sponsorId,
         status: 'Planning',
-        members: [{ personId: f.values.pmId, role: 'Project manager' }],
+        members: [{ personId: f.values.pmId, role: 'Project manager', allocation: 100 }],
         formerMembers: [],
         productIds: [],
         ownerDept: f.values.ownerDept,
@@ -116,6 +121,8 @@ function NewProject({ open, onOpenChange }: { open: boolean; onOpenChange: (o: b
         start: TODAY,
         target: f.values.target,
         deliverables: [],
+        budget: Math.round(Number(f.values.budget)),
+        approvers: { budget: f.values.budgetApprovers, timeline: f.values.timelineApprovers },
         stages: [
           { name: 'Plan', ownerId: f.values.pmId, needs: 'Scope and plan agreed', approverIds: [f.values.sponsorId], status: 'Current' },
           { name: 'Deliver', ownerId: f.values.pmId, needs: 'All activities accepted', approverIds: [f.values.sponsorId], status: 'Upcoming' },
@@ -129,7 +136,7 @@ function NewProject({ open, onOpenChange }: { open: boolean; onOpenChange: (o: b
     onOpenChange(false)
   }
   return (
-    <FormSheet open={open} onOpenChange={onOpenChange} title="New project" description="Projects start in Planning. Stages and approvers can be refined later." onSubmit={submit} submitLabel="Create project">
+    <FormSheet open={open} onOpenChange={onOpenChange} title="New project" description="Projects start in Planning. Decide up front who approves budget and timeline changes." onSubmit={submit} submitLabel="Create project">
       <Field label="Name" required error={f.errors.name}>
         <TextInput value={f.values.name} onChange={(e) => f.set('name', e.target.value)} invalid={!!f.errors.name} />
       </Field>
@@ -145,9 +152,17 @@ function NewProject({ open, onOpenChange }: { open: boolean; onOpenChange: (o: b
       <Field label="Owning department" required error={f.errors.ownerDept}>
         <Select options={depts} placeholder="Select department" value={f.values.ownerDept} onChange={(e) => f.set('ownerDept', e.target.value)} invalid={!!f.errors.ownerDept} />
       </Field>
-      <Field label="Target date" required error={f.errors.target}>
-        <TextInput type="date" value={f.values.target} onChange={(e) => f.set('target', e.target.value)} invalid={!!f.errors.target} />
-      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Target date" required error={f.errors.target}>
+          <TextInput type="date" value={f.values.target} onChange={(e) => f.set('target', e.target.value)} invalid={!!f.errors.target} />
+        </Field>
+        <Field label="Budget (EUR)" required error={f.errors.budget}>
+          <TextInput type="number" inputMode="numeric" min="0" step="100" value={f.values.budget} onChange={(e) => f.set('budget', e.target.value)} invalid={!!f.errors.budget} />
+        </Field>
+      </div>
+      <PeoplePicker label="Budget approvers" value={f.values.budgetApprovers} onChange={(x) => f.set('budgetApprovers', x)} error={f.errors.budgetApprovers} />
+      <PeoplePicker label="Timeline approvers" value={f.values.timelineApprovers} onChange={(x) => f.set('timelineApprovers', x)} error={f.errors.timelineApprovers} />
+      <p className="text-xs leading-relaxed text-muted-foreground">All listed approvers must approve. Budget approvers sign off budget changes and project expenses of {fmtEUR(500)} or more; timeline approvers sign off target date changes.</p>
     </FormSheet>
   )
 }
