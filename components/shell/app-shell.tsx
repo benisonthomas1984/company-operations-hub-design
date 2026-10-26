@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Bell, Coins, LogOut, Mail, Menu, UserRound } from 'lucide-react'
 import { Sheet, SheetContent, SheetTitle } from '@/components/ui/sheet'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useStore } from '@/lib/store'
 import { accessRoleLabel } from '@/lib/fixtures'
 import { noticesFor } from '@/lib/derive'
@@ -112,12 +112,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               </span>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-60">
-              <DropdownMenuLabel className="flex flex-col gap-0.5">
-                <span className="text-sm text-foreground">{me.fullName}</span>
-                <span className="text-xs font-normal text-muted-foreground">
-                  {me.email} · {accessRoleLabel[me.accessRole]}
-                </span>
-              </DropdownMenuLabel>
+              <DropdownMenuGroup>
+                <DropdownMenuLabel className="flex flex-col gap-0.5">
+                  <span className="text-sm text-foreground">{me.fullName}</span>
+                  <span className="text-xs font-normal text-muted-foreground">
+                    {me.email} · {accessRoleLabel[me.accessRole]}
+                  </span>
+                </DropdownMenuLabel>
+              </DropdownMenuGroup>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => router.push(`/employees/${me.id}`)}>
                 <UserRound /> My profile
