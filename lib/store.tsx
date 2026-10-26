@@ -20,7 +20,7 @@ import {
   type Employee,
 } from './fixtures'
 
-const KEY = 'coh-prototype-v2'
+const KEY = 'coh-prototype-v3'
 
 export type Account = { email: string; password: string; personId: string; companyId: string }
 export type DossierTurn = { id: string; q: string; credits: number }

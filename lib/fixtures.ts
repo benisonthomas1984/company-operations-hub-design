@@ -5,6 +5,8 @@
  * same records. Emergent: replace with company-scoped, permission-filtered APIs.
  */
 
+import { enrichSample } from './sample-enrich'
+
 export const TODAY = '2026-10-25'
 export const PERIOD = { id: '2026-10', label: 'October 2026', short: 'Oct 2026' }
 
@@ -517,7 +519,7 @@ const resp = (id: string, employeeId: string, title: string, description: string
 })
 
 export function demoCompany(): CompanyData {
-  return {
+  return enrichSample({
     id: 'co_comet_works',
     name: 'Comet Works',
     industry: 'Accounting software',
@@ -766,7 +768,7 @@ export function demoCompany(): CompanyData {
       { id: 'AUD-9902', at: '2026-10-18 17:44', actor: 'elena', action: 'Employee deactivated', target: 'Tom Andersen', detail: 'Pending approvals flagged for replacement' },
     ],
     productivityRequests: [],
-  }
+  })
 }
 
 export function freshCompany(id: string, name: string, owner: { id: string; fullName: string; email: string; designation: string }, packageId: string, industry: string, country: string): CompanyData {

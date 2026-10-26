@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useState } from 'react'
-import { Lock, Plus } from 'lucide-react'
+import { Lock, Plus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { accessRoleLabel, relLabel, TODAY } from '@/lib/fixtures'
 import { useHub } from '@/lib/store'
@@ -11,13 +11,13 @@ import { Button } from '@/components/ui/button'
 import { Avatar, Callout, DeptTag, KV, Panel, PersonLink, StatusPill } from '@/components/hub/primitives'
 import { Page, StateBlock } from '@/components/hub/page'
 import { ActivityTable } from '@/components/activities/activity-table'
-import { Field, FormSheet, TextArea, TextInput, required, useForm } from '@/components/hub/form'
+import { TextInput } from '@/components/hub/form'
 
 export function EmployeeProfile({ id }: { id: string }) {
   const { company: c, me, can, mutate } = useHub()
   const e = empOf(c, id)
-  const [open, setOpen] = useState(false)
-  const f = useForm({ title: '', description: '', scope: '' })
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState('')
 
   if (!e || e.status === 'vacancy')
     return (
@@ -36,27 +36,38 @@ export function EmployeeProfile({ id }: { id: string }) {
   const prod = productivity(c, e.id)
   const canAssign = isManagerOf || can('org.edit')
 
-  const addResp = () => {
-    if (!f.validate({ title: required('Title'), description: required('Description'), scope: required('Scope') })) return
+  const addResp = (ev: React.FormEvent) => {
+    ev.preventDefault()
+    const text = draft.trim()
+    if (!text) return
     mutate((c2, ctx) => {
       const rid = ctx.id('RSP')
-      c2.responsibilities.unshift({
+      c2.responsibilities.push({
         id: rid,
         employeeId: e.id,
-        title: f.values.title,
-        description: f.values.description,
-        scope: f.values.scope,
+        title: text,
+        description: text,
+        scope: '',
         assignerId: ctx.me.id,
         effective: TODAY,
         approvalRequired: false,
         status: 'Active',
-        versions: [{ v: 1, text: f.values.description, at: ctx.now, by: ctx.me.id, note: 'Assigned' }],
+        versions: [{ v: 1, text, at: ctx.now, by: ctx.me.id, note: 'Assigned' }],
       })
-      ctx.audit('responsibility.assign', rid, `${f.values.title} → ${e.fullName}`)
+      ctx.audit('responsibility.assign', rid, `${text} → ${e.fullName}`)
     })
-    toast.success('Responsibility assigned')
-    f.reset()
-    setOpen(false)
+    toast.success('Responsibility added')
+    setDraft('')
+  }
+
+  const removeResp = (rid: string) => {
+    mutate((c2, ctx) => {
+      const r = c2.responsibilities.find((x) => x.id === rid)
+      if (!r) return
+      r.status = 'Removed'
+      ctx.audit('responsibility.remove', rid, `${r.title} — ${e.fullName}`)
+    })
+    toast.success('Responsibility removed')
   }
 
   return (
@@ -83,27 +94,56 @@ export function EmployeeProfile({ id }: { id: string }) {
             title="Responsibilities"
             description="Ongoing accountabilities, separate from time-bound activities."
             action={
-              canAssign && (
-                <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-                  <Plus aria-hidden /> Assign
+              canAssign &&
+              !adding && (
+                <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+                  <Plus aria-hidden /> Add
                 </Button>
               )
             }
           >
             {resp.length ? (
-              <ul className="divide-y divide-border">
+              <ul className="flex flex-col">
                 {resp.map((r) => (
-                  <li key={r.id} className="flex flex-col gap-1 py-2.5">
-                    <span className="font-medium text-foreground">{r.title}</span>
-                    <span className="text-sm leading-relaxed text-muted-foreground">{r.description}</span>
-                    <span className="text-xs text-muted-foreground">
-                      Scope: {r.scope} · since {r.effective} · assigned by {empOf(c, r.assignerId)?.fullName ?? 'Unknown'} · v{r.versions.length}
+                  <li key={r.id} className="group flex items-start gap-3 rounded-md px-1 py-1.5 hover:bg-muted/60">
+                    <span aria-hidden className="mt-2 size-1.5 shrink-0 rounded-full bg-primary" />
+                    <span className="flex-1 text-sm leading-relaxed text-foreground" title={`Since ${r.effective} · assigned by ${empOf(c, r.assignerId)?.fullName ?? 'Unknown'}`}>
+                      {r.title}
                     </span>
+                    {canAssign && (
+                      <button
+                        type="button"
+                        onClick={() => removeResp(r.id)}
+                        className="rounded p-1 text-muted-foreground opacity-0 hover:bg-background hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+                        aria-label={`Remove responsibility: ${r.title}`}
+                      >
+                        <X className="size-3.5" aria-hidden />
+                      </button>
+                    )}
                   </li>
                 ))}
               </ul>
             ) : (
-              <p className="text-sm text-muted-foreground">No responsibilities assigned.</p>
+              !adding && <p className="text-sm text-muted-foreground">No responsibilities yet.</p>
+            )}
+            {adding && (
+              <form onSubmit={addResp} className="mt-2 flex items-center gap-2">
+                <TextInput
+                  autoFocus
+                  value={draft}
+                  onChange={(ev) => setDraft(ev.target.value)}
+                  onKeyDown={(ev) => ev.key === 'Escape' && setAdding(false)}
+                  placeholder="e.g. Review integration pull requests within two days"
+                  aria-label="New responsibility"
+                  className="flex-1"
+                />
+                <Button type="submit" size="sm" disabled={!draft.trim()}>
+                  Add
+                </Button>
+                <Button type="button" size="sm" variant="ghost" onClick={() => { setAdding(false); setDraft('') }}>
+                  Done
+                </Button>
+              </form>
             )}
           </Panel>
 
@@ -192,18 +232,6 @@ export function EmployeeProfile({ id }: { id: string }) {
           </Panel>
         </aside>
       </div>
-
-      <FormSheet open={open} onOpenChange={setOpen} title={`Assign responsibility to ${e.fullName}`} onSubmit={addResp} submitLabel="Assign">
-        <Field label="Title" required error={f.errors.title}>
-          <TextInput value={f.values.title} onChange={(ev) => f.set('title', ev.target.value)} invalid={!!f.errors.title} />
-        </Field>
-        <Field label="Description" required error={f.errors.description}>
-          <TextArea value={f.values.description} onChange={(ev) => f.set('description', ev.target.value)} invalid={!!f.errors.description} />
-        </Field>
-        <Field label="Scope" required error={f.errors.scope} hint="e.g. a product, department or process">
-          <TextInput value={f.values.scope} onChange={(ev) => f.set('scope', ev.target.value)} invalid={!!f.errors.scope} />
-        </Field>
-      </FormSheet>
     </Page>
   )
 }
