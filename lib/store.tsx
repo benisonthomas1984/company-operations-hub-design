@@ -162,8 +162,23 @@ export function AppStoreProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   useEffect(() => {
-    if (db) window.localStorage.setItem(KEY, JSON.stringify(db))
+    if (!db) return
+    const next = JSON.stringify(db)
+    if (window.localStorage.getItem(KEY) !== next) window.localStorage.setItem(KEY, next)
   }, [db])
+
+  // Keeps every open tab (e.g. the org chart opened in a new tab) on the same record.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== KEY || !e.newValue) return
+      try {
+        const parsed = JSON.parse(e.newValue) as DB
+        if (parsed.v === 2) setDb(parsed)
+      } catch {}
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
 
   const company = db?.session ? (db.companies[db.session.companyId] ?? null) : null
   const me = company && db?.session ? (company.employees.find((e) => e.id === db.session!.personId) ?? null) : null

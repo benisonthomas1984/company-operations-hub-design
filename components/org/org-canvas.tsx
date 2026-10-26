@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { Minus, Network, Plus, Trash2, UserPlus } from 'lucide-react'
+import { ExternalLink, Minus, Network, Plus, Trash2, UserPlus } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { useHub } from '@/lib/store'
@@ -19,7 +19,7 @@ const relStyle: Record<RelType, { stroke: string; dash?: string }> = {
 
 export const defaultLayout = treeLayout
 
-export function OrgCanvas({ compact = false }: { compact?: boolean }) {
+export function OrgCanvas({ compact = false, fullscreen = false }: { compact?: boolean; fullscreen?: boolean }) {
   const { company: c, can, mutate } = useHub()
   const canEdit = can('org.edit')
   const [zoom, setZoom] = useState(compact ? 0.8 : 0.9)
@@ -105,8 +105,26 @@ export function OrgCanvas({ compact = false }: { compact?: boolean }) {
   }
 
   return (
-    <div className={cn('flex flex-col overflow-hidden rounded-lg border border-border bg-card', compact ? 'h-[600px]' : 'h-[calc(100dvh-14rem)] min-h-[560px]')}>
+    <div
+      className={cn(
+        'flex flex-col overflow-hidden bg-card',
+        fullscreen ? 'h-full' : 'rounded-lg border border-border',
+        !fullscreen && (compact ? 'h-[600px]' : 'h-[calc(100dvh-14rem)] min-h-[560px]'),
+      )}
+    >
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+        {!fullscreen && (
+          <a
+            href="/org-chart"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="order-last ml-auto inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-sm font-medium hover:bg-muted"
+          >
+            <ExternalLink className="size-4" aria-hidden="true" />
+            Open in new tab
+            <span className="sr-only">(opens a new tab)</span>
+          </a>
+        )}
         <div className="flex items-center rounded-md border border-border bg-card">
           <button type="button" className="p-1.5 hover:bg-muted" onClick={() => setZoom((z) => Math.max(0.4, +(z - 0.1).toFixed(2)))} aria-label="Zoom out">
             <Minus className="size-4" />
