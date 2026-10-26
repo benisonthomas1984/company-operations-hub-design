@@ -6,16 +6,19 @@ import { Search, UserPlus } from 'lucide-react'
 import { accessRoleLabel } from '@/lib/fixtures'
 import { useHub } from '@/lib/store'
 import { managerOf } from '@/lib/derive'
-import { buttonVariants } from '@/components/ui/button'
+import { Button } from '@/components/ui/button'
 import { Avatar, DeptTag, PersonLink, StatusPill } from '@/components/hub/primitives'
 import { Page, StateBlock } from '@/components/hub/page'
-import { Select } from '@/components/hub/form'
+import { Select, useParam } from '@/components/hub/form'
+import { AddEmployeeSheet } from '@/components/employees/add-employee'
 
 export function Directory() {
   const { company: c, can } = useHub()
+  const [invite, setInvite] = useParam('invite')
+  const [position] = useParam('position')
   const [q, setQ] = useState('')
   const [dept, setDept] = useState('')
-  const [status, setStatus] = useState('active')
+  const [status, setStatus] = useState('')
 
   const rows = useMemo(
     () =>
@@ -34,12 +37,13 @@ export function Directory() {
       description={`Work profiles for ${c.name}. Restricted personal fields appear only to authorized viewers.`}
       actions={
         can('org.edit') && (
-          <Link href="/settings?tab=invitations" className={buttonVariants({ size: 'sm' })}>
-            <UserPlus aria-hidden /> Invite employee
-          </Link>
+          <Button size="sm" onClick={() => setInvite('1')}>
+            <UserPlus aria-hidden /> Add employee
+          </Button>
         )
       }
     >
+      {can('org.edit') && <AddEmployeeSheet key={position || 'new'} open={invite === '1'} onOpenChange={(o) => setInvite(o ? '1' : null, o ? undefined : { position: null })} positionId={position} />}
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <Search aria-hidden className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />

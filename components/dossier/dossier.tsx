@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ArrowUp, Lock, Sparkles, Trash2 } from 'lucide-react'
 import type { CompanyData, Employee } from '@/lib/fixtures'
 import { fmtEUR, PERIOD } from '@/lib/fixtures'
@@ -99,6 +99,12 @@ function answer(c: CompanyData, me: Employee, q: string, caps: { finance: boolea
 export function Dossier() {
   const { company: c, me, can, priv, setPriv, spendAi } = useHub()
   const [q, setQ] = useState('')
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const turns = priv.dossier.length
+  useEffect(() => {
+    const el = scrollRef.current
+    if (el && turns) el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' })
+  }, [turns])
   const [notice, setNotice] = useState<string | null>(null)
   const caps = { finance: can('finance.read'), caseHandler: can('complaints.case') }
   const prompts = ['What is waiting on my approval?', 'What is blocked right now?', 'What is overdue?', ...(caps.finance ? [`What is each product's contribution in ${PERIOD.short}?`] : []), 'What are my open activities?']
@@ -130,21 +136,29 @@ export function Dossier() {
         )
       }
     >
-      <div className="grid gap-4 xl:grid-cols-[1fr_300px]">
-        <div className="flex min-w-0 flex-col gap-4">
+      <div className="-m-4 flex h-[calc(100dvh-11rem)] min-h-[480px] flex-col md:-m-6">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 py-6 md:px-6">
           {priv.dossier.length === 0 && (
-            <Panel title="Start with a question">
-              <div className="flex flex-wrap gap-2">
+            <div className="flex flex-col items-center gap-5 py-10 text-center md:py-16">
+              <span className="flex size-10 items-center justify-center rounded-full bg-muted">
+                <Sparkles aria-hidden className="size-5 text-info" />
+              </span>
+              <div className="flex flex-col gap-1.5">
+                <h2 className="text-2xl font-semibold text-balance text-foreground">Start with a question</h2>
+                <p className="max-w-md text-sm leading-relaxed text-pretty text-muted-foreground">Ask anything about work in {c.name}. Every answer cites the records it was built from.</p>
+              </div>
+              <div className="flex max-w-xl flex-wrap justify-center gap-2">
                 {prompts.map((p) => (
-                  <Button key={p} size="sm" variant="outline" onClick={() => ask(p)}>
+                  <Button key={p} size="sm" variant="outline" className="rounded-full" onClick={() => ask(p)}>
                     {p}
                   </Button>
                 ))}
               </div>
-            </Panel>
+            </div>
           )}
 
-          <ol className="flex flex-col gap-4" aria-live="polite">
+          <ol className="flex flex-col gap-6" aria-live="polite">
             {priv.dossier.map((turn) => {
               const a = answer(c, me, turn.q, caps)
               return (
@@ -181,57 +195,56 @@ export function Dossier() {
               )
             })}
           </ol>
-
-          {notice && <Callout tone="warning" title="AI credits exhausted">{notice}</Callout>}
-
-          <form
-            className="sticky bottom-4 flex items-end gap-2 rounded-lg border border-border bg-card p-2 shadow-sm"
-            onSubmit={(e) => {
-              e.preventDefault()
-              ask(q)
-            }}
-          >
-            <label htmlFor="dossier-q" className="sr-only">
-              Ask the dossier
-            </label>
-            <textarea
-              id="dossier-q"
-              rows={1}
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
-                  e.preventDefault()
-                  ask(q)
-                }
-              }}
-              placeholder="Ask about activities, approvals, projects or products…"
-              className="min-h-9 flex-1 resize-none bg-transparent px-2 py-2 text-sm outline-none placeholder:text-muted-foreground"
-            />
-            <Button type="submit" size="icon" disabled={!q.trim()} aria-label="Ask">
-              <ArrowUp aria-hidden />
-            </Button>
-          </form>
+          </div>
         </div>
 
-        <aside className="flex flex-col gap-4">
-          <Panel title="AI credits">
-            <div className="flex flex-col gap-2">
-              <Progress value={(c.credits.used / c.credits.limit) * 100} aria-label="Credits used" />
-              <p className="text-sm text-muted-foreground">
-                <span className="font-mono text-foreground">{left}</span> of {c.credits.limit} left this period · {CREDITS_PER_QUESTION} per question. Repeats are free.
-              </p>
+        <div className="border-t border-border bg-background">
+          <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-4 py-4 md:px-6">
+            {notice && <Callout tone="warning" title="AI credits exhausted">{notice}</Callout>}
+            <form
+              className="flex flex-col gap-2 rounded-xl border border-border bg-card p-3 shadow-sm focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20"
+              onSubmit={(e) => {
+                e.preventDefault()
+                ask(q)
+              }}
+            >
+              <label htmlFor="dossier-q" className="sr-only">
+                Ask the dossier
+              </label>
+              <textarea
+                id="dossier-q"
+                rows={2}
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
+                    e.preventDefault()
+                    ask(q)
+                  }
+                }}
+                placeholder="Ask about activities, approvals, projects or products…"
+                className="max-h-48 min-h-12 w-full resize-none bg-transparent px-1 text-sm leading-relaxed outline-none placeholder:text-muted-foreground"
+              />
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex min-w-0 flex-wrap items-center gap-1.5">
+                  <SourceChip label="Activities" freshness="live" />
+                  <SourceChip label="Approvals" freshness="live" />
+                  <SourceChip label="Projects" freshness="live" />
+                  <SourceChip label="Finance" freshness={caps.finance ? 'live' : 'restricted'} state={caps.finance ? 'ok' : 'down'} />
+                </div>
+                <Button type="submit" size="icon" className="shrink-0 rounded-full" disabled={!q.trim()} aria-label="Ask">
+                  <ArrowUp aria-hidden />
+                </Button>
+              </div>
+            </form>
+            <div className="flex items-center gap-3 text-xs text-muted-foreground">
+              <Progress value={(c.credits.used / c.credits.limit) * 100} aria-label="AI credits used" className="h-1 w-24" />
+              <span>
+                <span className="font-mono text-foreground">{left}</span> of {c.credits.limit} credits left · {CREDITS_PER_QUESTION} per question, repeats are free · Enter to send
+              </span>
             </div>
-          </Panel>
-          <Panel title="What it can read">
-            <div className="flex flex-col gap-2">
-              <SourceChip label="Activities in your scope" freshness="live" />
-              <SourceChip label="Approvals naming you" freshness="live" />
-              <SourceChip label="Projects" freshness="live" />
-              <SourceChip label="Product finance" freshness={caps.finance ? 'live' : 'restricted'} state={caps.finance ? 'ok' : 'down'} />
-            </div>
-          </Panel>
-        </aside>
+          </div>
+        </div>
       </div>
     </Page>
   )
