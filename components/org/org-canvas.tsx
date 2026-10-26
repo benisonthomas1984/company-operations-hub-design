@@ -74,12 +74,20 @@ export function OrgCanvas({ compact = false }: { compact?: boolean }) {
     toast.success('Chart arranged by reporting line')
   }
 
-  const addPosition = () => {
+  const addPosition = (mode: 'child' | 'peer') => {
     let newId = ''
     mutate((co, { id, audit, me }) => {
       newId = id('vac')
-      const parent = (selId && co.employees.find((e) => e.id === selId)) || co.employees.find((e) => e.accessRole === 'owner') || me
-      const dept = parent?.dept || co.departments[0]?.id || ''
+      const selected = selId ? co.employees.find((e) => e.id === selId) : undefined
+      const owner = co.employees.find((e) => e.accessRole === 'owner') || me
+      let parent: Employee | undefined
+      if (mode === 'peer' && selected) {
+        const mgrId = co.relationships.find((r) => r.type === 'direct' && r.from === selected.id)?.to
+        parent = mgrId ? co.employees.find((e) => e.id === mgrId) : undefined
+      } else {
+        parent = selected || owner
+      }
+      const dept = (mode === 'peer' ? selected?.dept : parent?.dept) || co.departments[0]?.id || ''
       co.employees.push({ id: newId, fullName: 'Open position', designation: 'New position', dept, email: '', status: 'vacancy', location: '—', joined: '', accessRole: 'member' })
       if (parent) setDirectManager(co, newId, parent.id)
       const hasManual = Object.keys(co.layout).length > 0
@@ -87,8 +95,11 @@ export function OrgCanvas({ compact = false }: { compact?: boolean }) {
         const pp = co.layout[parent.id] ?? treeLayout(co)[parent.id]
         const siblings = co.relationships.filter((r) => r.type === 'direct' && r.to === parent.id).length
         if (pp) co.layout[newId] = { x: pp.x + (siblings - 1) * (CARD_W + 24), y: pp.y + 120 }
+      } else if (hasManual && selected) {
+        const sp = co.layout[selected.id] ?? treeLayout(co)[selected.id]
+        if (sp) co.layout[newId] = { x: sp.x + CARD_W + 24, y: sp.y }
       }
-      audit('Added position', newId, parent ? `Reports to ${parent.designation}` : '')
+      audit('Added position', newId, parent ? `Reports to ${parent.designation}` : 'Top level')
     })
     setSelId(newId)
   }
@@ -119,9 +130,20 @@ export function OrgCanvas({ compact = false }: { compact?: boolean }) {
             <Button size="sm" variant="outline" onClick={autoArrange}>
               <Network /> Auto-arrange
             </Button>
-            <Button size="sm" onClick={addPosition}>
-              <UserPlus /> {sel ? `Add position under ${sel.designation}` : 'Add position'}
-            </Button>
+            {sel ? (
+              <>
+                <Button size="sm" variant="outline" onClick={() => addPosition('peer')}>
+                  <UserPlus /> Add alongside {sel.designation}
+                </Button>
+                <Button size="sm" onClick={() => addPosition('child')}>
+                  <UserPlus /> Add under {sel.designation}
+                </Button>
+              </>
+            ) : (
+              <Button size="sm" onClick={() => addPosition('child')}>
+                <UserPlus /> Add position
+              </Button>
+            )}
           </div>
         )}
       </div>
@@ -204,7 +226,7 @@ export function OrgCanvas({ compact = false }: { compact?: boolean }) {
             <SelectedPanel key={sel.id} p={sel} canEdit={canEdit} onFocus={setSelId} />
           ) : (
             <p className="text-sm leading-relaxed text-muted-foreground">
-              Select a position to edit its title, who holds it and which position it reports to. Select a position and use Add position to create a role under it.
+              Select a position to edit its title, who holds it and which position it reports to. With nothing selected, Add position creates a role reporting to the owner. Select a position to add a role under it or alongside it (same manager).
               {!canEdit && ' Your arrangement is temporary; only administrators save the company layout.'}
             </p>
           )}
