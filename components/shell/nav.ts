@@ -39,7 +39,7 @@ export const navItems: NavItem[] = [
   { href: '/proposals', label: 'Proposals', icon: Lightbulb, group: 'company' },
   { href: '/products', label: 'Products & Services', icon: Boxes, group: 'company' },
   { href: '/backlog', label: 'Backlog & Releases', icon: BookOpenCheck, group: 'company' },
-  { href: '/announcements', label: 'Announcements', icon: Megaphone, group: 'company' },
+  { href: '/communications/announcements', label: 'Announcements', icon: Megaphone, group: 'company' },
   { href: '/finance', label: 'Finance', icon: Wallet, requires: 'finance.read', group: 'company' },
   { href: '/mail', label: 'My Mail', icon: Mail, group: 'personal' },
   { href: '/complaints', label: 'Complaints', icon: ShieldAlert, group: 'personal' },

@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { Pencil, Plus, RefreshCw } from 'lucide-react'
+import { Pencil, Plus, RefreshCw, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { fmtEUR, PERIOD, TODAY, type BusinessProduct, type Client, type Release, type SourceKind, type SourceLink, type SourceMode, type SubscriptionEventType } from '@/lib/fixtures'
@@ -15,6 +15,7 @@ import { Page, StateBlock } from '@/components/hub/page'
 import { ActivityTable } from '@/components/activities/activity-table'
 import { CreateActivity } from '@/components/activities/activities-workspace'
 import { SpreadsheetImport } from './spreadsheet-import'
+import { ProfitImport } from './profit-import'
 import { cn } from '@/lib/utils'
 
 const kindLabel: Record<SourceKind, string> = { clients: 'Clients', tickets: 'Support tickets', revenue: 'Revenue' }
@@ -603,6 +604,7 @@ function Figure({ label, value, tone, note }: { label: string; value: string; to
 function ProfitTab({ b, period, onPeriod }: { b: BusinessProduct; period: PeriodSel; onPeriod: (p: PeriodSel) => void }) {
   const { company: c, can } = useHub()
   const [recording, setRecording] = useState(false)
+  const [importing, setImporting] = useState(false)
   const internal = isInternal(b)
   if (!can('finance.read')) return <Callout tone="warning" title="Finance access required">Income, expense and profit figures are only visible to people with finance access.</Callout>
   const months = periodMonths(period)
@@ -617,6 +619,7 @@ function ProfitTab({ b, period, onPeriod }: { b: BusinessProduct; period: Period
         <h2 className="text-sm font-semibold text-foreground">{internal ? 'Cost' : 'Profit'} · {periodTitle(period, months)}</h2>
         <div className="flex flex-wrap items-center gap-2">
           <PeriodPicker value={period} onChange={onPeriod} />
+          {can('manage') && <Button size="sm" variant="outline" onClick={() => setImporting(true)}><Sparkles /> Import spreadsheet</Button>}
           {!internal && can('manage') && <Button size="sm" variant="outline" onClick={() => setRecording(true)}><Plus /> Record income</Button>}
         </div>
       </div>
@@ -696,6 +699,7 @@ function ProfitTab({ b, period, onPeriod }: { b: BusinessProduct; period: Period
         </Panel>
       </div>
       <RecordIncome b={b} open={recording} onOpenChange={setRecording} />
+      <ProfitImport b={b} open={importing} onOpenChange={setImporting} />
     </div>
   )
 }

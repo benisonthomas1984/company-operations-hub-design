@@ -113,7 +113,7 @@ function applyOutcome(c: CompanyData, r: ApprovalRound, now: string) {
         status: 'Planning',
         members: [{ personId: p.authorId, role: 'Project manager', allocation: 100 }],
         formerMembers: [],
-        productIds: [],
+        productIds: p.productId && c.products.some((x) => x.id === p.productId) ? [p.productId] : [],
         ownerDept: dept,
         deptIds: dept ? [dept] : [],
         start: now.slice(0, 10),

@@ -1,4 +1,4 @@
-import type { Activity, CompanyData, DecisionRecord, FileRecord, Meeting, Message, Project, Responsibility } from './fixtures'
+import type { Activity, CompanyData, DecisionRecord, FileRecord, Goal, GoalStatus, Meeting, Message, Project, Responsibility } from './fixtures'
 
 /**
  * Fills the sample company so every active employee has one-line responsibilities,
@@ -152,9 +152,36 @@ const SALARIES: Record<string, number> = {
   jules: 48000, kofi: 62000, sam: 36000, lin: 34000, elena: 70000, ines: 40000, nina: 76000, tom: 44000,
 }
 
+const g = (id: string, title: string, measure: string, due: string, status: GoalStatus, setBy: string, note?: string): Goal => ({ id, title, measure, due, status, setBy, setAt: '2026-07-01', note })
+
+const GOALS: Record<string, Goal[]> = {
+  ana: [
+    g('GOL-ana-1', 'Ship the accounting connector', 'ACT-1042 accepted with integration tests green', '2026-11-06', 'On track', 'noor'),
+    g('GOL-ana-2', 'Faster code reviews', '90% of reviews done within 2 working days', '2026-12-31', 'On track', 'noor'),
+    g('GOL-ana-3', 'Own one customer-facing integration end to end', 'Spec, build, launch note and support hand-off', '2027-03-31', 'At risk', 'noor', 'Waiting on vendor sandbox access'),
+  ],
+  noor: [
+    g('GOL-noor-1', 'Reader v2 launch quality bar', 'Zero P1 bugs in the first 30 days after launch', '2026-12-15', 'On track', 'ravi'),
+    g('GOL-noor-2', 'Grow the backend team', 'Two backend hires onboarded', '2026-12-31', 'At risk', 'ravi', 'Final panels scheduled 28 Oct'),
+  ],
+  priya: [
+    g('GOL-priya-1', 'Reader v2 design system', 'All v2 screens built from shared components', '2026-11-15', 'On track', 'noor'),
+    g('GOL-priya-2', 'Usability testing cadence', 'One moderated test round per month', '2026-12-31', 'Achieved', 'noor'),
+  ],
+  luca: [
+    g('GOL-luca-1', 'Launch campaign pipeline', '400 qualified trial sign-ups from the v2 launch', '2026-12-31', 'On track', 'maya'),
+    g('GOL-luca-2', 'Brand refresh', 'New brand direction approved and rolled out on the site', '2026-11-30', 'At risk', 'maya'),
+  ],
+  omar: [
+    g('GOL-omar-1', 'Support response time', 'First response under 4 business hours', '2026-12-31', 'On track', 'kofi'),
+    g('GOL-omar-2', 'Help centre coverage', '30 new help articles for v2', '2026-11-30', 'Missed', 'kofi', 'Delayed by launch scope changes'),
+  ],
+}
+
 export function enrichSample(c: CompanyData): CompanyData {
   c.employees.forEach((e) => {
     if (SALARIES[e.id]) e.salary = SALARIES[e.id]
+    if (GOALS[e.id] && !e.goals) e.goals = GOALS[e.id]
   })
   const responsibilities: Responsibility[] = []
   Object.entries(RESPONSIBILITIES).forEach(([employeeId, r]) =>
@@ -181,7 +208,20 @@ export function enrichSample(c: CompanyData): CompanyData {
   c.files = [...c.files, ...EXTRA_FILES]
   c.meetings = [...c.meetings, ...EXTRA_MEETINGS]
   addProductHistory(c)
+  balanceAllocations(c)
   return c
+}
+
+/** Sample members without an explicit allocation share the time left after explicit allocations, capped at 80% so some time stays with the department. */
+function balanceAllocations(c: CompanyData) {
+  c.employees.forEach((e) => {
+    const memberships = c.projects.flatMap((p) => p.members.filter((m) => m.personId === e.id))
+    const implicit = memberships.filter((m) => m.allocation === undefined)
+    if (!implicit.length) return
+    const explicit = memberships.reduce((s, m) => s + (m.allocation ?? 0), 0)
+    const share = Math.max(10, Math.floor(Math.max(0, 80 - explicit) / implicit.length / 5) * 5)
+    implicit.forEach((m) => (m.allocation = share))
+  })
 }
 
 const READER = 'bps_orion_reader'

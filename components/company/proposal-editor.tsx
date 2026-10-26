@@ -38,6 +38,7 @@ type Values = {
   budgetDev: string
   budgetOngoing: string
   effort: string
+  productId: string
 }
 
 const toValues = (p?: Proposal): Values => ({
@@ -60,6 +61,7 @@ const toValues = (p?: Proposal): Values => ({
   budgetDev: p?.budgetDev != null ? String(p.budgetDev) : '',
   budgetOngoing: p?.budgetOngoing != null ? String(p.budgetOngoing) : '',
   effort: p?.effort ?? '',
+  productId: p?.productId ?? '',
 })
 
 const num = (v: string) => (v.trim() === '' ? undefined : Number(v))
@@ -84,6 +86,7 @@ function applyValues(t: Proposal, v: Values) {
   t.budgetDev = v.budgetMode === 'cash' ? num(v.budgetDev) : undefined
   t.budgetOngoing = v.budgetMode === 'cash' ? num(v.budgetOngoing) : undefined
   t.effort = v.budgetMode === 'effort' ? v.effort : undefined
+  t.productId = v.productId || undefined
 }
 
 export function ProposalEditorPage({ id }: { id?: string }) {
@@ -198,6 +201,9 @@ function ProposalEditor({ existing }: { existing?: Proposal }) {
               <Field label="Title" required error={f.errors.title}><TextInput {...f.bind('title')} placeholder="e.g. Supplier invoice inbox" /></Field>
               <Field label="Type"><Select {...f.bind('kind')} options={['Product', 'Service', 'Process'].map((k) => ({ value: k, label: k }))} /></Field>
             </div>
+            <Field label="Related product or service" hint="When approved, the new project is linked to this product and shows up on its page.">
+              <Select {...f.bind('productId')} options={[{ value: '', label: 'None — new idea' }, ...c.products.map((p) => ({ value: p.id, label: `${p.name} (${p.kind})` }))]} />
+            </Field>
             <Field label="The idea" hint="An elevator pitch: what it is and why now."><TextArea rows={4} {...f.bind('idea')} /></Field>
           </div>
         </Panel>

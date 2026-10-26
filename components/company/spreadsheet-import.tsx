@@ -27,7 +27,7 @@ function parseCsv(text: string): string[][] {
   return rows.filter((r) => r.some((x) => x.trim()))
 }
 
-async function readRows(file: File): Promise<string[][]> {
+export async function readRows(file: File): Promise<string[][]> {
   if (/\.xlsx$/i.test(file.name)) {
     const { readSheet } = await import('read-excel-file/browser')
     const data = await readSheet(file)

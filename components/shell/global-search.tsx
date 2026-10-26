@@ -44,7 +44,7 @@ export function GlobalSearch() {
       ...c.products.map((b) => ({ id: b.id, label: b.name, kind: b.kind, href: `/products/${b.id}` })),
       ...c.files.filter((f) => ctxOk(f.ctx)).map((f) => ({ id: f.id, label: `${f.name} · ${contextInfo(c, f.ctx).label}`, kind: 'File', href: `${contextInfo(c, f.ctx).href}?tab=files` })),
       ...c.decisions.filter((d) => ctxOk(d.ctx)).map((d) => ({ id: d.id, label: `${d.id} ${d.title}`, kind: 'Decision', href: `${contextInfo(c, d.ctx).href}?tab=decisions` })),
-      ...c.announcements.filter((a) => canSeeAnnouncement(a, me, manage) && (a.status === 'Published' || manage || a.senderId === me.id)).map((a) => ({ id: a.id, label: a.title, kind: 'Announcement', href: `/announcements?id=${a.id}` })),
+      ...c.announcements.filter((a) => canSeeAnnouncement(a, me, manage) && (a.status === 'Published' || manage || a.senderId === me.id)).map((a) => ({ id: a.id, label: a.title, kind: 'Announcement', href: `/communications/announcements?id=${a.id}` })),
     ]
     if (can('finance.read')) hits.push(...c.expenses.map((e) => ({ id: e.id, label: `${e.id} ${e.description}`, kind: 'Expense', href: `/finance?tab=expenses&id=${e.id}` })))
     if (!priv.mailDisconnected) hits.push(...(c.mailboxes[me.id] ?? []).map((m) => ({ id: m.id, label: m.subject, kind: 'My Mail (private)', href: `/mail?m=${m.id}` })))

@@ -66,7 +66,13 @@ export type Employee = {
   invitationId?: string
   /** Annual gross salary in EUR — drives project people cost. */
   salary?: number
+  /** Performance-review goals agreed with the manager. */
+  goals?: Goal[]
 }
+
+export type GoalStatus = 'On track' | 'At risk' | 'Achieved' | 'Missed'
+export const goalStatuses: GoalStatus[] = ['On track', 'At risk', 'Achieved', 'Missed']
+export type Goal = { id: string; title: string; measure: string; due: string; status: GoalStatus; setBy: string; setAt: string; note?: string }
 
 export type RelType = 'direct' | 'project' | 'functional'
 export type Relationship = { id: string; from: string; to: string; type: RelType; primary?: boolean; context?: string }
@@ -356,6 +362,8 @@ export type Proposal = {
   approverMode: 'board' | 'named'
   approverIds: string[]
   approvalId?: string
+  /** Existing product or service this proposal builds on; carried to the project on approval. */
+  productId?: string
   converted?: { type: 'backlog' | 'project' | 'product'; id: string; at: string }
   updated: string
 }

@@ -180,6 +180,31 @@ export function projectCost(c: CompanyData, p: Project) {
     missingSalary: people.filter((l) => !l.salary).map((l) => l.personId),
   }
 }
+/**
+ * How a person's salary is distributed across the projects they are allocated to.
+ * Monthly value = annual salary ÷ 12 × allocation %. Time not allocated to any project is shown as unallocated.
+ */
+export function personAllocation(c: CompanyData, personId: string) {
+  const salary = empOf(c, personId)?.salary ?? 0
+  const monthly = salary / 12
+  const rows = c.projects.flatMap((p) => {
+    const m = p.members.find((x) => x.personId === personId)
+    const former = p.formerMembers.find((x) => x.personId === personId)
+    const isLead = p.pmId === personId || p.sponsorId === personId
+    if (!m && !former && !isLead) return []
+    const allocation = m ? (m.allocation ?? 100) : 0
+    const cost = projectCost(c, p).people.find((l) => l.personId === personId)
+    const acts = c.activities.filter((a) => a.ownerId === personId && a.projectId === p.id && a.status !== 'Cancelled')
+    const accepted = acts.filter((a) => a.status === 'Accepted')
+    const onTime = accepted.filter((a) => (a.acceptedAt ?? '') <= dueOf(a))
+    const role = m?.role ?? (p.pmId === personId ? 'Project manager' : p.sponsorId === personId ? 'Sponsor' : former?.role ?? '')
+    return [{ project: p, role, allocation, former: !m && !!former, monthlyValue: Math.round(monthly * (allocation / 100)), costToDate: cost?.costToDate ?? 0, acts, accepted, onTime, overdue: acts.filter(isOverdue) }]
+  })
+  const allocated = rows.filter((r) => !r.former).reduce((s, r) => s + r.allocation, 0)
+  const unallocated = Math.max(0, 100 - allocated)
+  return { salary, monthly: Math.round(monthly), rows, allocated, unallocated, unallocatedMonthly: Math.round(monthly * (unallocated / 100)), overAllocated: allocated > 100 }
+}
+
 export const pendingExpense = (e: Expense) => e.status === 'Submitted' || e.status === 'Changes requested' || e.status === 'Draft'
 
 export function productFinance(c: CompanyData, productId: string, period = PERIOD.id) {
@@ -388,7 +413,7 @@ export function noticesFor(c: CompanyData, me: Employee, canCase: boolean): Noti
   pendingFor(c, me.id, canCase).forEach((r) => out.push({ id: `apr-${r.id}`, title: `Your decision is needed: ${r.itemTitle}`, body: `${r.itemType} · ${r.workflowVersion}`, href: `/approvals?id=${r.id}`, at: r.submittedAt }))
   c.activities.filter((a) => a.reviewerId === me.id && a.status === 'Submitted for review').forEach((a) => out.push({ id: `rev-${a.id}`, title: `Review requested: ${a.title}`, body: `Submitted by ${firstName(empOf(c, a.ownerId))}`, href: `/activities?id=${a.id}`, at: a.history.at(-1)?.at ?? '' }))
   c.activities.filter((a) => a.ownerId === me.id && a.status === 'Reopened').forEach((a) => out.push({ id: `reo-${a.id}`, title: `Reopened: ${a.title}`, body: a.evidence ?? 'Changes requested by reviewer', href: `/activities?id=${a.id}`, at: '' }))
-  c.announcements.filter((a) => a.status === 'Published' && canSeeAnnouncement(a, me, false) && a.ackRequired && !a.acks.includes(me.id)).forEach((a) => out.push({ id: `ann-${a.id}`, title: `Announcement: ${a.title}`, body: 'Acknowledgment requested', href: `/announcements?id=${a.id}`, at: a.publishedAt ?? '' }))
+  c.announcements.filter((a) => a.status === 'Published' && canSeeAnnouncement(a, me, false) && a.ackRequired && !a.acks.includes(me.id)).forEach((a) => out.push({ id: `ann-${a.id}`, title: `Announcement: ${a.title}`, body: 'Acknowledgment requested', href: `/communications/announcements?id=${a.id}`, at: a.publishedAt ?? '' }))
   if (canCase) c.complaints.filter((x) => x.status !== 'Resolved').forEach((x) => out.push({ id: `cmp-${x.id}`, title: 'Complaint case open (in-app only)', body: 'Open the case inbox to view', href: `/complaints?case=${x.id}`, at: x.receivedAt }))
   c.invitations.filter((i) => i.createdBy === me.id && i.status === 'Accepted').forEach((i) => out.push({ id: `inv-${i.id}`, title: `${i.name} accepted your invitation`, body: i.designation, href: `/employees/${i.employeeId}`, at: i.history.at(-1)?.at ?? '' }))
   return out
