@@ -23,7 +23,7 @@ export const deptColorCls: Record<DeptColor, { text: string; bg: string; border:
 
 export type DeptId = string
 
-export type Department = { id: DeptId; name: string; leadId: string | null; color: DeptColor; isDepartment: boolean; purpose?: string; budget?: number }
+export type Department = { id: DeptId; name: string; leadId: string | null; color: DeptColor; isDepartment: boolean; purpose?: string; budget?: number; history?: { at: string; by: string; text: string }[] }
 
 export type AccessRole = 'owner' | 'admin' | 'finance' | 'hr' | 'manager' | 'member'
 export const accessRoleLabel: Record<AccessRole, string> = {
@@ -51,6 +51,8 @@ export type Employee = {
   dob?: string
   emergency?: string
   invitationId?: string
+  /** Annual gross salary in EUR — drives project people cost. */
+  salary?: number
 }
 
 export type RelType = 'direct' | 'project' | 'functional'
@@ -129,8 +131,9 @@ export type Project = {
   pmId: string
   sponsorId: string
   status: 'Planning' | 'Active' | 'Closing' | 'Closed'
-  members: { personId: string; role: string }[]
-  formerMembers: { personId: string; role: string; until: string }[]
+  /** allocation = % of the person's working time spent on this project (default 100). */
+  members: { personId: string; role: string; allocation?: number }[]
+  formerMembers: { personId: string; role: string; until: string; allocation?: number }[]
   productIds: string[]
   ownerDept: DeptId
   deptIds: DeptId[]
@@ -331,9 +334,10 @@ export type Meeting = {
   url: string
   organizerId: string
   status: 'Scheduled' | 'Cancelled'
+  invitesSent?: boolean
   history: { at: string; by: string; text: string }[]
 }
-export type FileRecord = { id: string; ctx: string; name: string; kind: string; size: string; versions: { v: number; at: string; by: string; note: string }[]; source: 'Upload' | 'Link'; url?: string }
+export type FileRecord = { id: string; ctx: string; name: string; kind: string; size: string; versions: { v: number; at: string; by: string; note: string }[]; source: 'Upload' | 'Link'; url?: string; dataUrl?: string; mime?: string }
 export type DecisionRecord = { id: string; ctx: string; title: string; text: string; rationale: string; deciderId: string; at: string; related: string; createdBy: string }
 
 export type Announcement = {

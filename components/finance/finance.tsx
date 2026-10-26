@@ -16,8 +16,8 @@ import { Page, StateBlock } from '@/components/hub/page'
 import { buildRound } from '@/components/approvals/approvals'
 import { Field, FormSheet, Select, TextInput, required, useDeptOptions, useForm } from '@/components/hub/form'
 
-const categories: ExpenseCategory[] = ['Hosting', 'Tools & software', 'Contractor', 'Employee cost', 'Travel', 'Marketing', 'Other']
-const APPROVAL_THRESHOLD = 500
+export const categories: ExpenseCategory[] = ['Hosting', 'Tools & software', 'Contractor', 'Employee cost', 'Travel', 'Marketing', 'Other']
+export const APPROVAL_THRESHOLD = 500
 
 function Money({ v, strong }: { v: number; strong?: boolean }) {
   return <span className={strong ? 'font-mono font-semibold text-foreground' : 'font-mono text-foreground'}>{fmtEUR(v)}</span>

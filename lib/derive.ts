@@ -75,6 +75,46 @@ export function projectHealth(c: CompanyData, p: Project): { value: 'On track' |
 }
 
 export const countable = (e: Expense) => e.status === 'Approved · unpaid' || e.status === 'Paid'
+
+const dayMs = 86_400_000
+const daysBetween = (from: string, to: string) => Math.max(0, Math.round((Date.parse(to) - Date.parse(from)) / dayMs) + 1)
+
+export type CostLine = { personId: string; role: string; allocation: number; salary?: number; daysToDate: number; costToDate: number; projected: number; former?: boolean }
+
+/**
+ * Project cost = people cost (annual salary ÷ 365 × days on project × allocation %) + approved/paid expenses.
+ * Current members are counted from project start; former members until the day they left.
+ */
+export function projectCost(c: CompanyData, p: Project) {
+  const end = p.target < TODAY ? p.target : TODAY
+  const line = (personId: string, role: string, allocation = 100, until?: string): CostLine => {
+    const salary = empOf(c, personId)?.salary
+    const stop = until && until < end ? until : end
+    const daysToDate = p.start > TODAY ? 0 : daysBetween(p.start, stop)
+    const daysTotal = daysBetween(p.start, until && until < p.target ? until : p.target)
+    const rate = ((salary ?? 0) / 365) * (allocation / 100)
+    return { personId, role, allocation, salary, daysToDate, costToDate: Math.round(rate * daysToDate), projected: Math.round(rate * daysTotal), former: !!until }
+  }
+  const people = [...p.members.map((m) => line(m.personId, m.role, m.allocation)), ...p.formerMembers.map((m) => line(m.personId, m.role, m.allocation, m.until))]
+  const expenses = c.expenses.filter((e) => e.projectId === p.id)
+  const approved = expenses.filter(countable)
+  const pending = expenses.filter(pendingExpense)
+  const peopleToDate = people.reduce((s, l) => s + l.costToDate, 0)
+  const peopleProjected = people.reduce((s, l) => s + l.projected, 0)
+  const expensesTotal = approved.reduce((s, e) => s + e.amount, 0)
+  const pendingTotal = pending.reduce((s, e) => s + e.amount, 0)
+  return {
+    people,
+    expenses,
+    peopleToDate,
+    peopleProjected,
+    expensesTotal,
+    pendingTotal,
+    toDate: peopleToDate + expensesTotal,
+    projected: peopleProjected + expensesTotal + pendingTotal,
+    missingSalary: people.filter((l) => !l.salary).map((l) => l.personId),
+  }
+}
 export const pendingExpense = (e: Expense) => e.status === 'Submitted' || e.status === 'Changes requested' || e.status === 'Draft'
 
 export function productFinance(c: CompanyData, productId: string, period = PERIOD.id) {

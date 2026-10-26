@@ -147,7 +147,15 @@ const EXTRA_MEETINGS: Meeting[] = [
   { id: 'MTG-22', ctx: 'project:PRJ-10', title: 'Board pack dry run', agenda: 'Walk through the November board pack', date: '2026-11-03', time: '09:30', tz: 'Europe/Lisbon', duration: 60, attendeeIds: ['nina', 'maya', 'ravi'], external: [], url: 'https://meet.example/board', organizerId: 'nina', status: 'Scheduled', history: [] },
 ]
 
+const SALARIES: Record<string, number> = {
+  maya: 140000, ravi: 130000, noor: 110000, ana: 58000, priya: 64000, omar: 46000, luca: 72000,
+  jules: 48000, kofi: 62000, sam: 36000, lin: 34000, elena: 70000, ines: 40000, nina: 76000, tom: 44000,
+}
+
 export function enrichSample(c: CompanyData): CompanyData {
+  c.employees.forEach((e) => {
+    if (SALARIES[e.id]) e.salary = SALARIES[e.id]
+  })
   const responsibilities: Responsibility[] = []
   Object.entries(RESPONSIBILITIES).forEach(([employeeId, r]) =>
     r.items.forEach((text, i) =>
