@@ -1,5 +1,70 @@
-import { PERIOD, TODAY, ctxKey, type Activity, type ApprovalRound, type CompanyData, type ContextRef, type Department, type Employee, type Expense, type Project } from './fixtures'
+import { PERIOD, TODAY, ctxKey, defaultConnectors, tickets as seedTickets, type Activity, type ApprovalRound, type BusinessProduct, type CompanyData, type ContextRef, type Department, type Employee, type Expense, type Project, type SourceKind, type SourceLink, type SupportTicket } from './fixtures'
 import { capsFor } from './store'
+
+export const connectorsOf = (c: CompanyData) => c.connectors ?? defaultConnectors
+export const isInternal = (b: BusinessProduct) => b.revenueModel === 'Internal'
+
+const fallbackSource: Record<string, Partial<Record<SourceKind, SourceLink>>> = {
+  bps_orion_reader: { clients: { mode: 'MCP', connectorId: 'mcp_zoho_crm', mapping: 'Deals · Product = Reader · Stage = Closed won', lastSync: '2026-10-25 06:00' }, tickets: { mode: 'MCP', connectorId: 'mcp_zoho_desk', mapping: 'Department: Reader', lastSync: '2026-10-24 17:05' }, revenue: { mode: 'MCP', connectorId: 'mcp_zoho_books', mapping: 'Item group READER', lastSync: '2026-10-25 06:00' } },
+  bps_ledger_sync: { clients: { mode: 'Manual' }, tickets: { mode: 'MCP', connectorId: 'mcp_zoho_desk', mapping: 'Tag: ledger-sync', lastSync: '2026-10-24 11:45' } },
+}
+
+export function sourceOf(c: CompanyData, b: BusinessProduct, kind: SourceKind): { link: SourceLink; connector?: ReturnType<typeof connectorsOf>[number]; label: string } {
+  const link = b.sources?.[kind] ?? fallbackSource[b.id]?.[kind] ?? { mode: 'Manual' as const }
+  const connector = link.connectorId ? connectorsOf(c).find((x) => x.id === link.connectorId) : undefined
+  const label = link.mode === 'MCP' ? `${connector?.name ?? 'MCP'} via MCP` : link.mode === 'Excel upload' ? 'Excel upload' : 'Entered manually'
+  return { link, connector, label }
+}
+
+export const ticketsOf = (c: CompanyData, productId: string): SupportTicket[] => [...(c.supportTickets ?? []), ...seedTickets].filter((t) => t.product === productId)
+
+export const scopeOf = (a: Activity): 'department' | 'project' | 'product' => a.scope ?? (a.projectId ? 'project' : a.productId ? 'product' : 'department')
+
+/** Everything planned or running against a product, gathered across departments and projects. */
+export function productInsight(c: CompanyData, productId: string) {
+  const b = c.products.find((p) => p.id === productId)
+  const projects = c.projects.filter((p) => p.productIds.includes(productId))
+  const projectIds = new Set(projects.map((p) => p.id))
+  const backlog = c.backlog.filter((x) => x.productId === productId)
+  const backlogIds = new Set(backlog.map((x) => x.id))
+  const activities = c.activities.filter((a) => a.productId === productId || (a.projectId && projectIds.has(a.projectId)) || (a.backlogId && backlogIds.has(a.backlogId)))
+  const releases = c.releases.filter((r) => r.productId === productId)
+  const roles = new Map<string, Set<string>>()
+  const add = (id: string | undefined, role: string) => {
+    if (!id || !c.employees.some((e) => e.id === id && e.status !== 'vacancy')) return
+    if (!roles.has(id)) roles.set(id, new Set())
+    roles.get(id)!.add(role)
+  }
+  if (b) add(b.ownerId, 'Product owner')
+  projects.forEach((p) => {
+    add(p.pmId, `PM · ${p.name}`)
+    p.members.forEach((m) => add(m.personId, `${m.role} · ${p.name}`))
+  })
+  activities.forEach((a) => {
+    add(a.ownerId, 'Activity owner')
+    add(a.reviewerId, 'Reviewer')
+  })
+  backlog.forEach((x) => add(x.ownerId, 'Backlog owner'))
+  releases.forEach((r) => add(r.ownerId, 'Release owner'))
+  const people = Array.from(roles.entries()).map(([personId, r]) => ({ personId, roles: Array.from(r) }))
+  const depts = Array.from(new Set([...(b ? [b.dept] : []), ...projects.flatMap((p) => p.deptIds), ...activities.map((a) => a.dept)]))
+  const openActivities = activities.filter(isOpen)
+  const tix = ticketsOf(c, productId)
+  return {
+    projects,
+    activeProjects: projects.filter((p) => !['Completed', 'Cancelled', 'Closed'].includes(p.status)),
+    activities,
+    openActivities,
+    overdue: openActivities.filter(isOverdue),
+    backlog,
+    queued: backlog.filter((x) => x.status === 'Submitted for approval' || x.status === 'Committed' || x.status === 'Draft'),
+    releases,
+    people,
+    depts,
+    tickets: tix,
+    openTickets: tix.filter((t) => t.status !== 'Solved' && t.status !== 'Closed'),
+  }
+}
 
 export const empOf = (c: CompanyData, id?: string | null) => (id ? c.employees.find((e) => e.id === id) : undefined)
 export const deptOf = (c: CompanyData, id?: string | null) => (id ? c.departments.find((d) => d.id === id) : undefined)

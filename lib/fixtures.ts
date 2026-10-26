@@ -118,6 +118,8 @@ export type Activity = {
   dept: DeptId
   projectId: string | null
   productId: string | null
+  /** What the activity is planned for. Older records infer it from projectId/productId. */
+  scope?: 'department' | 'project' | 'product'
   backlogId?: string
   status: ActivityStatus
   priority: 'Low' | 'Medium' | 'High' | 'Critical'
@@ -181,7 +183,45 @@ export type BusinessProduct = {
   billingSource: string
   costScope: string
   mappings: string
+  /** Internal products carry the same delivery records but never recognise revenue. */
+  revenueModel?: RevenueModel
+  sources?: Partial<Record<SourceKind, SourceLink>>
 }
+
+export type RevenueModel = 'Revenue-generating' | 'Internal'
+export type SourceKind = 'clients' | 'tickets' | 'revenue'
+export type SourceMode = 'MCP' | 'Excel upload' | 'Manual'
+export type SourceLink = { mode: SourceMode; connectorId?: string; mapping?: string; lastSync?: string; lastSyncBy?: string }
+
+export type ConnectorProvider = 'Zoho CRM' | 'Zoho Desk' | 'Zoho Books' | 'Zendesk' | 'Freshdesk' | 'HubSpot' | 'Custom MCP'
+export type Connector = {
+  id: string
+  name: string
+  provider: ConnectorProvider
+  url: string
+  dataTypes: SourceKind[]
+  status: 'Connected' | 'Disconnected'
+  addedBy: string
+  at: string
+}
+
+export const connectorProviders: { provider: ConnectorProvider; url: string; dataTypes: SourceKind[] }[] = [
+  { provider: 'Zoho CRM', url: 'https://mcp.zoho.eu/crm', dataTypes: ['clients'] },
+  { provider: 'Zoho Desk', url: 'https://mcp.zoho.eu/desk', dataTypes: ['tickets'] },
+  { provider: 'Zoho Books', url: 'https://mcp.zoho.eu/books', dataTypes: ['revenue', 'clients'] },
+  { provider: 'Zendesk', url: 'https://mcp.zendesk.com', dataTypes: ['tickets'] },
+  { provider: 'Freshdesk', url: 'https://mcp.freshdesk.com', dataTypes: ['tickets'] },
+  { provider: 'HubSpot', url: 'https://mcp.hubspot.com', dataTypes: ['clients'] },
+  { provider: 'Custom MCP', url: '', dataTypes: [] },
+]
+
+export const defaultConnectors: Connector[] = [
+  { id: 'mcp_zoho_crm', name: 'Zoho CRM', provider: 'Zoho CRM', url: 'https://mcp.zoho.eu/crm', dataTypes: ['clients'], status: 'Connected', addedBy: 'maya', at: '2026-09-01 10:00' },
+  { id: 'mcp_zoho_desk', name: 'Zoho Desk', provider: 'Zoho Desk', url: 'https://mcp.zoho.eu/desk', dataTypes: ['tickets'], status: 'Connected', addedBy: 'maya', at: '2026-09-01 10:05' },
+  { id: 'mcp_zoho_books', name: 'Zoho Books', provider: 'Zoho Books', url: 'https://mcp.zoho.eu/books', dataTypes: ['revenue', 'clients'], status: 'Connected', addedBy: 'nina', at: '2026-09-02 09:00' },
+]
+
+export type SupportTicket = { id: string; subject: string; product: string; status: string; priority: string; updated: string; body: string; source?: string }
 
 export type Revenue = { id: string; productId: string; period: string; recognized: number; invoiced: number; collected: number; source: string; history: { at: string; by: string; text: string }[] }
 
@@ -445,6 +485,8 @@ export type CompanyData = {
   mailboxes: Record<string, MailMessage[]>
   audit: AuditEntry[]
   productivityRequests: ProductivityRequest[]
+  connectors?: Connector[]
+  supportTickets?: SupportTicket[]
 }
 
 export const tickets = [
@@ -683,6 +725,16 @@ export function demoCompany(): CompanyData {
         targetCustomers: 'New Reader clients with 10+ staff', clientDefinition: 'Company with an onboarding engagement in the period', clientSource: 'Service engagement log',
         clients: [{ name: 'Studio Ledger SL', plan: 'Onboarding package', seats: 0, since: '2026-10-01', mrr: 0 }],
         activeUsers: 0, billingSource: 'One-off invoices', costScope: 'Support staff time', mappings: 'Invoice item ONB',
+        revenueModel: 'Revenue-generating',
+        sources: { clients: { mode: 'Manual' }, tickets: { mode: 'MCP', connectorId: 'mcp_zoho_desk', mapping: 'Department: Onboarding' }, revenue: { mode: 'MCP', connectorId: 'mcp_zoho_books', mapping: 'Item code ONB', lastSync: '2026-10-25 06:00' } },
+      },
+      {
+        id: 'bps_ops_console', name: 'Comet Ops Console', kind: 'Product', description: 'Internal admin console the support and finance teams use to manage client accounts.', ownerId: 'noor', dept: 'dev', lifecycle: 'Live',
+        targetCustomers: 'Internal — Support, Finance', clientDefinition: 'Internal team using the console', clientSource: 'Manual list',
+        clients: [{ name: 'Support team', plan: 'Internal', seats: 4, since: '2025-03-01', mrr: 0 }, { name: 'Finance team', plan: 'Internal', seats: 2, since: '2025-03-01', mrr: 0 }],
+        activeUsers: 6, billingSource: 'Not billed — internal', costScope: 'Delivery: hosting allocation, developer time', mappings: 'Support tag ops-console',
+        revenueModel: 'Internal',
+        sources: { clients: { mode: 'Manual' }, tickets: { mode: 'Excel upload' } },
       },
     ],
     revenue: [

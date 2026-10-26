@@ -13,6 +13,7 @@ import { ActivityTable, DueCell } from './activity-table'
 import { Callout, IdChip, KV, Panel, PersonLink, StatusPill } from '@/components/hub/primitives'
 import { Field, FormSheet, Select, TabBar, TextArea, TextInput, required, useDeptOptions, useForm, useParam, usePeopleOptions, useProductOptions, useProjectOptions } from '@/components/hub/form'
 import { StateBlock } from '@/components/hub/page'
+import { cn } from '@/lib/utils'
 
 type Scope = 'mine' | 'review' | 'team' | 'overdue'
 
@@ -244,10 +245,14 @@ export function CreateActivity({ open, onOpenChange, onCreated, preset }: { open
   const depts = useDeptOptions()
   const products = useProductOptions()
   const projects = useProjectOptions()
-  const f = useForm({ title: '', outcome: '', ownerId: me.id, reviewerId: '', dept: preset?.dept ?? me.dept, projectId: preset?.projectId ?? '', productId: preset?.productId ?? '', due: '', priority: 'Medium' })
+  const { company: hubCo } = useHub()
+  const initialScope: 'department' | 'project' | 'product' = preset?.projectId ? 'project' : preset?.productId ? 'product' : 'department'
+  const f = useForm({ title: '', outcome: '', ownerId: me.id, reviewerId: '', dept: preset?.dept ?? me.dept, scope: initialScope, projectId: preset?.projectId ?? '', productId: preset?.productId ?? '', due: '', priority: 'Medium' })
 
   const submit = () => {
     const ok = f.validate({
+      projectId: (v, all) => (all.scope === 'project' && !v ? 'Choose the project' : undefined),
+      productId: (v, all) => (all.scope === 'product' && !v ? 'Choose the product or service' : undefined),
       title: required('Title'),
       outcome: required('Expected outcome'),
       reviewerId: (v, all) => (!v ? 'Reviewer is required' : v === all.ownerId ? 'Reviewer must differ from owner' : undefined),
@@ -265,8 +270,9 @@ export function CreateActivity({ open, onOpenChange, onCreated, preset }: { open
         ownerId: v.ownerId,
         reviewerId: v.reviewerId,
         dept: v.dept,
-        projectId: v.projectId || null,
-        productId: v.productId || null,
+        scope: v.scope,
+        projectId: v.scope === 'project' ? v.projectId || null : null,
+        productId: v.scope === 'product' ? v.productId || null : v.scope === 'project' ? hubCo.projects.find((p) => p.id === v.projectId)?.productIds[0] ?? null : null,
         backlogId: preset?.backlogId,
         status: 'Planned',
         priority: v.priority as Activity['priority'],
@@ -307,12 +313,34 @@ export function CreateActivity({ open, onOpenChange, onCreated, preset }: { open
         <Field label="Due date" required error={f.errors.due}>
           <TextInput type="date" {...f.bind('due')} />
         </Field>
-        <Field label="Project (optional)">
-          <Select placeholder="None" options={projects} {...f.bind('projectId')} />
-        </Field>
-        <Field label="Product / service (optional)">
-          <Select placeholder="None" options={products} {...f.bind('productId')} />
-        </Field>
+        <fieldset className="flex flex-col gap-2 sm:col-span-2">
+          <legend className="mb-1.5 text-xs font-medium text-foreground">Activity is for</legend>
+          <div role="radiogroup" aria-label="Activity is for" className="grid grid-cols-3 gap-1 rounded-md border border-border bg-muted p-1">
+            {(['department', 'project', 'product'] as const).map((s) => (
+              <button
+                key={s}
+                type="button"
+                role="radio"
+                aria-checked={f.values.scope === s}
+                onClick={() => f.setValues((p) => ({ ...p, scope: s, projectId: s === 'project' ? p.projectId : '', productId: s === 'department' ? '' : p.productId }))}
+                className={cn('rounded px-2 py-1.5 text-sm capitalize', f.values.scope === s ? 'bg-card font-medium text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground')}
+              >
+                {s === 'product' ? 'Product / service' : s}
+              </button>
+            ))}
+          </div>
+          {f.values.scope === 'department' && <p className="text-xs text-muted-foreground">Routine work of the department — not tied to a project or product.</p>}
+          {f.values.scope === 'project' && (
+            <Field label="Project" required error={f.errors.projectId}>
+              <Select placeholder="Choose project" options={projects} {...f.bind('projectId')} />
+            </Field>
+          )}
+          {f.values.scope === 'product' && (
+            <Field label="Product / service" required error={f.errors.productId} hint="Shows on the product page under Activities.">
+              <Select placeholder="Choose product or service" options={products} {...f.bind('productId')} />
+            </Field>
+          )}
+        </fieldset>
         <Field label="Priority">
           <Select options={['Low', 'Medium', 'High', 'Critical'].map((p) => ({ value: p, label: p }))} {...f.bind('priority')} />
         </Field>
