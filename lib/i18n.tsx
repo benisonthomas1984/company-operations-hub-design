@@ -4,6 +4,8 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 
 export type Lang = 'en' | 'es'
 export const LANG_STORAGE_KEY = 'oh.lang'
+const DEFAULT_LANG_STORAGE_KEY = 'oh.lang.default'
+const CUSTOM_STORAGE_KEY = 'oh.lang.custom'
 
 type Dict = Record<string, string>
 
@@ -138,44 +140,140 @@ function createTranslator(dict: Dict) {
   }
 }
 
+export type TermRule = { find: string; replace: string }
+export type Customization = { terms: TermRule[]; phrases: Dict }
+
+export const DEFAULT_CUSTOMIZATION: Customization = {
+  terms: [
+    { find: 'Dossier de Inteligencia', replace: 'Intelligence Dossier' },
+    { find: 'Pendientes y lanzamientos', replace: 'Backlogs & Releases' },
+    { find: 'Flujos de trabajo y comités', replace: 'Flujos de trabajo' },
+    { find: 'Propietario', replace: 'Dueño' },
+  ],
+  phrases: {},
+}
+
+function escapeRegExp(s: string) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function termPattern(find: string) {
+  // Leading letter boundary only, so "propietario" also covers "propietarios".
+  return new RegExp(`(?<!\\p{L})${escapeRegExp(find.trim())}`, 'giu')
+}
+
+export function applyTerm(value: string, rule: TermRule): string {
+  if (!rule.find.trim()) return value
+  return value.replace(termPattern(rule.find), (match) => {
+    const first = match.charAt(0)
+    if (first !== first.toUpperCase()) return rule.replace
+    return rule.replace.charAt(0).toUpperCase() + rule.replace.slice(1)
+  })
+}
+
+export function termMatches(value: string, find: string) {
+  return !!find.trim() && termPattern(find).test(value)
+}
+
+export function buildDict(base: Dict, custom: Customization): Dict {
+  const terms = custom.terms.filter((r) => r.find.trim())
+  const out: Dict = {}
+  for (const [en, es] of Object.entries(base)) out[en] = terms.reduce(applyTerm, es)
+  for (const [en, es] of Object.entries(custom.phrases)) if (es.trim()) out[en] = es
+  return out
+}
+
+export const loadBaseSpanish = () => import('./i18n/es.json').then((m) => m.default as Dict)
+
+type CustomizationValue = {
+  defaultLang: Lang
+  setDefaultLang: (lang: Lang) => void
+  custom: Customization
+  setCustom: (next: Customization) => void
+}
+const CustomizationContext = createContext<CustomizationValue | null>(null)
+
+function readCustomization(): Customization {
+  try {
+    const raw = localStorage.getItem(CUSTOM_STORAGE_KEY)
+    if (raw) {
+      const parsed = JSON.parse(raw) as Partial<Customization>
+      return { terms: parsed.terms ?? [], phrases: parsed.phrases ?? {} }
+    }
+  } catch {}
+  return DEFAULT_CUSTOMIZATION
+}
+
 export function I18nProvider({ children }: { children: React.ReactNode }) {
   const [lang, setLangState] = useState<Lang>('en')
-  const [dict, setDict] = useState<Dict | null>(null)
+  const [defaultLang, setDefaultLangState] = useState<Lang>('en')
+  const [custom, setCustomState] = useState<Customization>(DEFAULT_CUSTOMIZATION)
+  const [base, setBase] = useState<Dict | null>(null)
   const translator = useRef<ReturnType<typeof createTranslator> | null>(null)
 
   useEffect(() => {
-    if (localStorage.getItem(LANG_STORAGE_KEY) === 'es') setLangState('es')
+    setCustomState(readCustomization())
+    const fallback: Lang = localStorage.getItem(DEFAULT_LANG_STORAGE_KEY) === 'es' ? 'es' : 'en'
+    setDefaultLangState(fallback)
+    const stored = localStorage.getItem(LANG_STORAGE_KEY)
+    const initial: Lang = stored === 'es' || stored === 'en' ? stored : fallback
+    if (initial === 'es') setLangState('es')
     else document.documentElement.removeAttribute('data-i18n-loading')
   }, [])
 
   useEffect(() => {
-    document.documentElement.lang = lang
-    if (lang !== 'es') return
+    if (lang !== 'es' || base) return
     let cancelled = false
-    import('./i18n/es.json').then((m) => {
-      if (cancelled) return
-      const d = m.default as Dict
-      setDict(d)
-      translator.current = createTranslator(d)
-      translator.current.start()
-      document.documentElement.removeAttribute('data-i18n-loading')
-    })
+    loadBaseSpanish().then((d) => !cancelled && setBase(d))
     return () => {
       cancelled = true
+    }
+  }, [lang, base])
+
+  const dict = useMemo(() => (base ? buildDict(base, custom) : null), [base, custom])
+
+  useEffect(() => {
+    document.documentElement.lang = lang
+    if (lang !== 'es' || !dict) return
+    translator.current = createTranslator(dict)
+    translator.current.start()
+    document.documentElement.removeAttribute('data-i18n-loading')
+    return () => {
       translator.current?.stop()
       translator.current = null
     }
-  }, [lang])
+  }, [lang, dict])
 
   const setLang = useCallback((next: Lang) => {
     localStorage.setItem(LANG_STORAGE_KEY, next)
     setLangState(next)
   }, [])
 
+  const setDefaultLang = useCallback((next: Lang) => {
+    localStorage.setItem(DEFAULT_LANG_STORAGE_KEY, next)
+    setDefaultLangState(next)
+  }, [])
+
+  const setCustom = useCallback((next: Customization) => {
+    localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify(next))
+    setCustomState(next)
+  }, [])
+
   const t = useCallback((s: string) => (lang === 'es' && dict ? (lookup(dict, s) ?? s) : s), [lang, dict])
 
   const value = useMemo(() => ({ lang, setLang, t }), [lang, setLang, t])
-  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
+  const customValue = useMemo(() => ({ defaultLang, setDefaultLang, custom, setCustom }), [defaultLang, setDefaultLang, custom, setCustom])
+  return (
+    <I18nContext.Provider value={value}>
+      <CustomizationContext.Provider value={customValue}>{children}</CustomizationContext.Provider>
+    </I18nContext.Provider>
+  )
+}
+
+export function useLanguageSettings() {
+  const ctx = useContext(CustomizationContext)
+  if (!ctx) throw new Error('useLanguageSettings must be used inside I18nProvider')
+  return ctx
 }
 
 export function useI18n() {
@@ -185,4 +283,4 @@ export function useI18n() {
 }
 
 /** Runs before hydration so Spanish users don't see an English flash on first load. */
-export const i18nBootScript = `try{if(localStorage.getItem('${LANG_STORAGE_KEY}')==='es'){var d=document.documentElement;d.lang='es';d.setAttribute('data-i18n-loading','');setTimeout(function(){d.removeAttribute('data-i18n-loading')},2500)}}catch(e){}`
+export const i18nBootScript = `try{var l=localStorage.getItem('${LANG_STORAGE_KEY}')||localStorage.getItem('oh.lang.default');if(l==='es'){var d=document.documentElement;d.lang='es';d.setAttribute('data-i18n-loading','');setTimeout(function(){d.removeAttribute('data-i18n-loading')},2500)}}catch(e){}`

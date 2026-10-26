@@ -42,12 +42,13 @@ function seed(): DB {
   return { v: 2, companies: { [demo.id]: demo }, accounts: demoAccounts, session: null, signup: null, private: {} }
 }
 
-export type Cap = 'manage' | 'org.edit' | 'finance.read' | 'finance.manage' | 'announce' | 'settings' | 'complaints.case'
+export type Cap = 'manage' | 'org.edit' | 'finance.read' | 'finance.manage' | 'announce' | 'settings' | 'complaints.case' | 'language'
 
 export function capsFor(e: Employee | undefined): Cap[] {
   if (!e) return []
   const caps: Cap[] = []
   const r = e.accessRole
+  if (r === 'owner') caps.push('language')
   if (r === 'owner' || r === 'admin') caps.push('manage', 'settings', 'org.edit')
   if (r === 'hr') caps.push('org.edit')
   if (r === 'owner' || r === 'admin' || r === 'finance' || e.financeRead) caps.push('finance.read')

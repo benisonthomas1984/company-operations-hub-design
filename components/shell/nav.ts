@@ -6,6 +6,7 @@ import {
   CheckSquare,
   CreditCard,
   FolderKanban,
+  Languages,
   Lightbulb,
   ListChecks,
   Mail,
@@ -47,6 +48,7 @@ export const navItems: NavItem[] = [
   { href: '/settings', label: 'Access & Roles', icon: Settings, requires: 'settings', group: 'admin' },
   { href: '/settings/workflows', label: 'Workflows & Committees', icon: Workflow, requires: 'settings', group: 'admin' },
   { href: '/settings/subscription', label: 'Subscription & Credits', icon: CreditCard, requires: 'settings', group: 'admin' },
+  { href: '/settings/language', label: 'Language', icon: Languages, requires: 'language', group: 'admin' },
 ]
 
 export const groupLabels: Record<NavItem['group'], string> = {
