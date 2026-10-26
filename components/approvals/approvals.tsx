@@ -10,6 +10,7 @@ import { empOf, sourceHref } from '@/lib/derive'
 import { ApprovalProgress, Callout, IdChip, KV, Panel, PersonLink, StatusPill, decisionMeta } from '@/components/hub/primitives'
 import { Field, TabBar, TextArea, useParam } from '@/components/hub/form'
 import { StateBlock } from '@/components/hub/page'
+import { ProposalDetails } from '@/components/company/proposal-report'
 import { cn } from '@/lib/utils'
 
 const mine = (r: ApprovalRound, id: string) => r.stages.some((s) => s.decisions.some((d) => d.personId === id))
@@ -83,6 +84,7 @@ function RoundDetail({ r }: { r: ApprovalRound }) {
   const [note, setNote] = useState('')
   const [err, setErr] = useState('')
   const canAct = r.status === 'Pending' && myPending(r, me.id)
+  const proposal = r.itemType === 'Proposal' ? c.proposals.find((p) => p.id === r.itemId) : undefined
 
   const act = (d: 'approved' | 'changes' | 'rejected') => {
     if (d !== 'approved' && !note.trim()) return setErr('A note is required when requesting changes or rejecting.')
@@ -113,7 +115,14 @@ function RoundDetail({ r }: { r: ApprovalRound }) {
           </KV>
           {r.amount !== undefined && <KV label="Amount">{new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR' }).format(r.amount)}</KV>}
         </dl>
-        <p className="text-sm leading-relaxed text-foreground">{r.summary}</p>
+        {proposal ? (
+          <div className="rounded-md border border-border p-4">
+            <ProposalDetails p={proposal} />
+          </div>
+        ) : (
+          <p className="text-sm leading-relaxed text-foreground">{r.summary}</p>
+        )}
+        {proposal && r.status === 'Pending' && <p className="text-xs text-muted-foreground">On approval this proposal is converted into a project automatically.</p>}
         <Callout tone="info" title="Every listed approver must approve">
           One change request or rejection stops the round. Resubmission starts a new round against a new revision.
         </Callout>

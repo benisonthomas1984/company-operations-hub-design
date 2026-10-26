@@ -212,9 +212,9 @@ export function deptCost(c: CompanyData, d: Department) {
 export function sourceHref(r: ApprovalRound) {
   switch (r.itemType) {
     case 'Proposal':
-      return `/proposals/${r.itemId}`
+      return `/proposals?id=${r.itemId}`
     case 'Backlog item':
-      return `/backlog/${r.itemId}`
+      return `/backlog?id=${r.itemId}`
     case 'Expense':
       return `/finance?tab=expenses&id=${r.itemId}`
     case 'Project stage':

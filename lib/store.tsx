@@ -97,7 +97,39 @@ function applyOutcome(c: CompanyData, r: ApprovalRound, now: string) {
   if (r.itemType === 'Proposal') {
     const p = c.proposals.find((x) => x.id === r.itemId)
     if (!p) return
-    if (r.status === 'Approved') p.status = 'Approved'
+    if (r.status === 'Approved' && !p.converted) {
+      const author = c.employees.find((e) => e.id === p.authorId)
+      const sponsorId = approverIds.find((id) => id !== p.authorId) ?? p.authorId
+      const id = `PRJ-${String(++c.seq).padStart(4, '0')}`
+      const target = new Date(now.slice(0, 10))
+      target.setDate(target.getDate() + 90)
+      const dept = author?.dept ?? c.departments[0]?.id
+      c.projects.unshift({
+        id,
+        name: p.title,
+        purpose: [p.solution, p.benefit && `Expected benefit: ${p.benefit}`].filter(Boolean).join('\n\n'),
+        pmId: p.authorId,
+        sponsorId,
+        status: 'Planning',
+        members: [{ personId: p.authorId, role: 'Project manager', allocation: 100 }],
+        formerMembers: [],
+        productIds: [],
+        ownerDept: dept,
+        deptIds: dept ? [dept] : [],
+        start: now.slice(0, 10),
+        target: target.toISOString().slice(0, 10),
+        deliverables: [],
+        budget: p.budgetMode === 'cash' ? p.budgetDev : undefined,
+        approvers: { budget: approverIds, timeline: [sponsorId] },
+        stages: [
+          { name: 'Plan', ownerId: p.authorId, needs: 'Scope and plan agreed', approverIds: [sponsorId], status: 'Current' },
+          { name: 'Deliver', ownerId: p.authorId, needs: 'All activities accepted', approverIds: [sponsorId], status: 'Upcoming' },
+        ],
+        history: [{ at: now, by: 'system', text: `Created from approved proposal ${p.id} (${r.id})${p.timeline ? ` · proposed timeline: ${p.timeline}` : ''}` }],
+      })
+      p.status = 'Converted'
+      p.converted = { type: 'project', id, at: now }
+    }
     if (r.status === 'Rejected') p.status = 'Rejected'
     if (r.status === 'Changes requested') p.status = 'Changes requested'
     p.updated = now.slice(0, 10)
