@@ -180,5 +180,45 @@ export function enrichSample(c: CompanyData): CompanyData {
   c.decisions = [...c.decisions, ...EXTRA_DECISIONS]
   c.files = [...c.files, ...EXTRA_FILES]
   c.meetings = [...c.meetings, ...EXTRA_MEETINGS]
+  addProductHistory(c)
   return c
+}
+
+const READER = 'bps_orion_reader'
+const ONBOARDING = 'bps_onboarding'
+
+/** Twelve months of income, costs and subscription movements so product profit can be read over any period. */
+function addProductHistory(c: CompanyData) {
+  const months = Array.from({ length: 11 }, (_, i) => {
+    const d = new Date(Date.UTC(2025, 10 + i, 1))
+    return d.toISOString().slice(0, 7)
+  })
+  const readerMrr = [6800, 7100, 7350, 7600, 7900, 8200, 8400, 8700, 9100, 9400, 9700]
+  months.forEach((m, i) => {
+    c.revenue.push({ id: `REV-H${i + 1}`, productId: READER, period: m, recognized: readerMrr[i], invoiced: readerMrr[i] + 200, collected: readerMrr[i], source: `Billing export BX-${String(i + 1).padStart(2, '0')} (mock)`, history: [{ at: `${m}-28 06:00`, by: 'nina', text: 'Imported from billing export' }] })
+    if (i % 3 === 1) c.revenue.push({ id: `REV-O${i + 1}`, productId: ONBOARDING, period: m, recognized: 1500, invoiced: 1500, collected: 1500, source: `Invoice INV-ONB-H${i + 1}`, history: [{ at: `${m}-10 10:00`, by: 'nina', text: 'Recorded manually' }] })
+    c.expenses.push(
+      { id: `EXP-H${i + 1}a`, description: `Shared cloud hosting — ${m}`, payee: 'Nimbus Cloud', category: 'Hosting', amount: 1000, currency: 'EUR', date: `${m}-12`, dept: 'dev', allocations: [{ productId: READER, amount: 600, kind: 'Delivery' }, { productId: 'bps_ledger_sync', amount: 400, kind: 'Delivery' }], approvalRequired: false, status: 'Paid', recurring: 'Monthly', submittedBy: 'nina', source: 'Bank feed match', history: [{ at: `${m}-12 08:30`, by: 'nina', text: 'Imported' }] },
+      { id: `EXP-H${i + 1}b`, description: `Reader support & marketing allocation — ${m}`, payee: 'Internal allocation', category: 'Marketing', amount: 1800 + (i % 4) * 150, currency: 'EUR', date: `${m}-20`, dept: 'mkt', allocations: [{ productId: READER, amount: 1800 + (i % 4) * 150, kind: 'Operating' }], approvalRequired: false, status: 'Paid', submittedBy: 'nina', source: 'Monthly allocation', history: [{ at: `${m}-20 09:00`, by: 'nina', text: 'Allocated' }] },
+    )
+  })
+  const reader = c.products.find((p) => p.id === READER)
+  if (reader) {
+    const src = 'Subscription billing (mock)'
+    reader.subscriptions = [
+      { id: 'SUB-01', date: '2025-11-03', client: 'Studio Ledger SL', type: 'Renewal', plan: 'Pro', seats: 12, mrrChange: 0, source: src },
+      { id: 'SUB-02', date: '2025-12-09', client: 'Kontor Nord', type: 'New', plan: 'Team', seats: 3, mrrChange: 120, source: src },
+      { id: 'SUB-03', date: '2026-01-20', client: 'Numeri & Co', type: 'New', plan: 'Team', seats: 4, mrrChange: 160, source: src },
+      { id: 'SUB-04', date: '2026-02-14', client: 'Fiscal Firm Lda', type: 'Upgrade', plan: 'Team', seats: 8, mrrChange: 120, source: src },
+      { id: 'SUB-05', date: '2026-03-02', client: 'Kontor Nord', type: 'Cancelled', plan: 'Team', seats: 3, mrrChange: -120, source: src },
+      { id: 'SUB-06', date: '2026-04-11', client: 'Ledgerwise Oy', type: 'New', plan: 'Pro', seats: 6, mrrChange: 300, source: src },
+      { id: 'SUB-07', date: '2026-05-18', client: 'Brightbooks BV', type: 'Upgrade', plan: 'Pro', seats: 9, mrrChange: 250, source: src },
+      { id: 'SUB-08', date: '2026-06-12', client: 'Contas Claras', type: 'Renewal', plan: 'Team', seats: 5, mrrChange: 0, source: src },
+      { id: 'SUB-09', date: '2026-07-07', client: 'Ledgerwise Oy', type: 'Downgrade', plan: 'Team', seats: 4, mrrChange: -140, source: src },
+      { id: 'SUB-10', date: '2026-08-21', client: 'Ledgerwise Oy', type: 'Cancelled', plan: 'Team', seats: 4, mrrChange: -160, source: src },
+      { id: 'SUB-11', date: '2026-09-01', client: 'Brightbooks BV', type: 'Renewal', plan: 'Pro', seats: 9, mrrChange: 0, source: src },
+      { id: 'SUB-12', date: '2026-10-06', client: 'Pilar Contabilidade', type: 'New', plan: 'Team', seats: 3, mrrChange: 120, source: src },
+      { id: 'SUB-13', date: '2026-10-19', client: 'Studio Ledger SL', type: 'Upgrade', plan: 'Pro', seats: 14, mrrChange: 100, source: src },
+    ]
+  }
 }

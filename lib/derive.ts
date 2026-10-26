@@ -201,6 +201,60 @@ export function productFinance(c: CompanyData, productId: string, period = PERIO
   return { rev, recognized, invoiced, collected, delivery, operating, costOfDelivery, opex, gross, operatingProfit, totalExpense: costOfDelivery + opex, margin: recognized ? operatingProfit / recognized : 0, hasRevenue, pending }
 }
 
+export type PeriodMode = 'month' | 'quarter' | 'year' | 'range'
+export type PeriodSel = { mode: PeriodMode; month: string; quarter: string; year: string; from: string; to: string }
+
+/** Expands a period selection into the 'YYYY-MM' months it covers. */
+export function periodMonths(p: PeriodSel): string[] {
+  const span = (from: string, to: string) => {
+    const out: string[] = []
+    let [y, m] = from.split('-').map(Number)
+    const [ty, tm] = to.split('-').map(Number)
+    while ((y < ty || (y === ty && m <= tm)) && out.length < 60) {
+      out.push(`${y}-${String(m).padStart(2, '0')}`)
+      m++
+      if (m > 12) (m = 1), y++
+    }
+    return out
+  }
+  if (p.mode === 'month') return [p.month]
+  if (p.mode === 'year') return span(`${p.year}-01`, `${p.year}-12`)
+  if (p.mode === 'quarter') {
+    const [y, q] = p.quarter.split('-Q').map(Number)
+    const start = (q - 1) * 3 + 1
+    return span(`${y}-${String(start).padStart(2, '0')}`, `${y}-${String(start + 2).padStart(2, '0')}`)
+  }
+  return p.from <= p.to ? span(p.from, p.to) : span(p.to, p.from)
+}
+
+export const monthLabel = (m: string) => new Date(`${m}-01T00:00:00Z`).toLocaleDateString('en-GB', { month: 'short', year: '2-digit', timeZone: 'UTC' })
+
+/** Income, expense and profit for a product across a set of months, month by month. */
+export function productProfit(c: CompanyData, productId: string, months: string[]) {
+  const rows = months.map((m) => {
+    const f = productFinance(c, productId, m)
+    return { month: m, income: f.recognized, delivery: f.costOfDelivery, operating: f.opex, expense: f.totalExpense, profit: f.operatingProfit, invoiced: f.invoiced, collected: f.collected, revenue: f.rev, lines: [...f.delivery, ...f.operating] }
+  })
+  const sum = (k: 'income' | 'delivery' | 'operating' | 'expense' | 'profit' | 'invoiced' | 'collected') => rows.reduce((s, r) => s + r[k], 0)
+  const income = sum('income')
+  const profit = sum('profit')
+  return { rows, income, delivery: sum('delivery'), operating: sum('operating'), expense: sum('expense'), profit, invoiced: sum('invoiced'), collected: sum('collected'), margin: income ? profit / income : 0 }
+}
+
+/** Subscription movements for a product within a set of months. */
+export function subscriptionActivity(b: BusinessProduct, months: string[]) {
+  const set = new Set(months)
+  const events = (b.subscriptions ?? []).filter((e) => set.has(e.date.slice(0, 7))).sort((x, y) => y.date.localeCompare(x.date))
+  const by = (t: string) => events.filter((e) => e.type === t)
+  const gained = events.filter((e) => e.mrrChange > 0).reduce((s, e) => s + e.mrrChange, 0)
+  const lost = events.filter((e) => e.mrrChange < 0).reduce((s, e) => s + e.mrrChange, 0)
+  const monthly = months.map((m) => {
+    const ev = events.filter((e) => e.date.startsWith(m))
+    return { month: m, gained: ev.filter((e) => e.mrrChange > 0).reduce((s, e) => s + e.mrrChange, 0), lost: ev.filter((e) => e.mrrChange < 0).reduce((s, e) => s + e.mrrChange, 0), count: ev.length }
+  })
+  return { events, newCount: by('New').length, upgrades: by('Upgrade').length, downgrades: by('Downgrade').length, renewals: by('Renewal').length, cancelled: by('Cancelled').length, gained, lost, net: gained + lost, monthly }
+}
+
 export function deptCosts(c: CompanyData, deptId: string, period = PERIOD.id) {
   const rows = c.expenses.filter((e) => e.dept === deptId && countable(e) && e.date.startsWith(period))
   const pending = c.expenses.filter((e) => e.dept === deptId && pendingExpense(e))

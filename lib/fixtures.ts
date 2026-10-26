@@ -186,7 +186,11 @@ export type BusinessProduct = {
   /** Internal products carry the same delivery records but never recognise revenue. */
   revenueModel?: RevenueModel
   sources?: Partial<Record<SourceKind, SourceLink>>
+  subscriptions?: SubscriptionEvent[]
 }
+
+export type SubscriptionEventType = 'New' | 'Upgrade' | 'Downgrade' | 'Renewal' | 'Cancelled'
+export type SubscriptionEvent = { id: string; date: string; client: string; type: SubscriptionEventType; plan: string; seats: number; mrrChange: number; source: string }
 
 export type RevenueModel = 'Revenue-generating' | 'Internal'
 export type SourceKind = 'clients' | 'tickets' | 'revenue'
