@@ -1,127 +1,496 @@
 'use client'
 
-import { createContext, useCallback, useContext, useMemo, useState } from 'react'
-import { initialActivities, initialApprovals, type Activity, type ApprovalRound, type Decision } from './fixtures'
-
 /**
- * Prototype-only client store. It simulates canonical records shared by every view
- * (one activity record appears in profile, project, department, dossier).
- * Emergent: replace with server state + server-side authorization. Review
- * perspectives are a design-review tool, NOT an impersonation privilege.
+ * Prototype-only persisted store. Simulates the central API: one canonical record
+ * per business object, scoped to the signed-in account's company, with private
+ * per-person state cleared on logout. Persistence uses browser storage so created
+ * records and deep links survive refresh. Emergent: replace with server state and
+ * server-side authorization; nothing here is production authentication.
  */
 
-export type PerspectiveId = 'maya' | 'ravi' | 'noor' | 'ana' | 'elena' | 'nina' | 'sam' | 'luca'
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  TODAY,
+  demoCompany,
+  freshCompany,
+  packages,
+  type ApprovalRound,
+  type CompanyData,
+  type Decision,
+  type Employee,
+} from './fixtures'
 
-export type Perspective = {
-  id: PerspectiveId
-  label: string
-  role: string
-  caps: Capability[]
+const KEY = 'coh-prototype-v3'
+
+export type Account = { email: string; password: string; personId: string; companyId: string }
+export type DossierTurn = { id: string; q: string; credits: number }
+export type PrivateState = { dossier: DossierTurn[]; mailDisconnected?: boolean; readNotifications: string[] }
+export type SignupDraft = { packageId: string; interval: 'month' | 'year' }
+
+type DB = {
+  v: 2
+  companies: Record<string, CompanyData>
+  accounts: Account[]
+  session: { personId: string; companyId: string } | null
+  signup: SignupDraft | null
+  private: Record<string, PrivateState>
 }
 
-export type Capability =
-  | 'finance.read'
-  | 'finance.manage'
-  | 'settings.manage'
-  | 'complaints.case'
-  | 'org.edit'
-  | 'board.member'
-  | 'project.lead'
-  | 'personal.restricted'
-  | 'announcements.publish'
+function seed(): DB {
+  const demo = demoCompany()
+  const demoAccounts: Account[] = demo.employees.filter((e) => e.status === 'active' && e.email).map((e) => ({ email: e.email, password: 'demo', personId: e.id, companyId: demo.id }))
+  return { v: 2, companies: { [demo.id]: demo }, accounts: demoAccounts, session: null, signup: null, private: {} }
+}
 
-export const perspectives: Perspective[] = [
-  { id: 'maya', label: 'Maya Okafor', role: 'Owner · authorized finance', caps: ['finance.read', 'settings.manage', 'org.edit', 'board.member', 'personal.restricted'] },
-  { id: 'ravi', label: 'Ravi Menon', role: 'CEO · board member', caps: ['finance.read', 'board.member', 'org.edit'] },
-  { id: 'noor', label: 'Noor Haddad', role: 'CTO · department & project lead', caps: ['board.member', 'project.lead'] },
-  { id: 'luca', label: 'Luca Bianchi', role: 'Marketing · project manager', caps: ['project.lead', 'announcements.publish'] },
-  { id: 'ana', label: 'Ana Ribeiro', role: 'Developer · mailbox owner', caps: [] },
-  { id: 'elena', label: 'Elena Petrova', role: 'HR lead · explicit complaint case role', caps: ['complaints.case', 'announcements.publish', 'personal.restricted'] },
-  { id: 'nina', label: 'Nina Kowalski', role: 'Finance user', caps: ['finance.read', 'finance.manage'] },
-  { id: 'sam', label: 'Sam Carter', role: 'Support · complaint submitter', caps: [] },
-]
+export type Cap = 'manage' | 'org.edit' | 'finance.read' | 'finance.manage' | 'announce' | 'settings' | 'complaints.case' | 'language'
+
+export function capsFor(e: Employee | undefined): Cap[] {
+  if (!e) return []
+  const caps: Cap[] = []
+  const r = e.accessRole
+  if (r === 'owner') caps.push('language')
+  if (r === 'owner' || r === 'admin') caps.push('manage', 'settings', 'org.edit')
+  if (r === 'hr') caps.push('org.edit')
+  if (r === 'owner' || r === 'admin' || r === 'finance' || e.financeRead) caps.push('finance.read')
+  if (r === 'owner' || r === 'finance') caps.push('finance.manage')
+  if (r === 'owner' || r === 'hr') caps.push('announce')
+  if (e.complaintHandler) caps.push('complaints.case')
+  return caps
+}
+
+export const nowStamp = () => {
+  const d = new Date()
+  return `${TODAY} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+export type MutateCtx = { me: Employee; now: string; id: (prefix: string) => string; audit: (action: string, target: string, detail?: string) => void }
 
 type Store = {
-  perspective: Perspective
-  setPerspective: (id: PerspectiveId) => void
-  companyId: string
-  setCompanyId: (id: string) => void
-  can: (cap: Capability) => boolean
-  activities: Activity[]
-  updateActivity: (id: string, patch: Partial<Activity>) => void
-  approvals: ApprovalRound[]
-  decide: (approvalId: string, personId: string, decision: Decision, note?: string) => void
-  aiCreditsUsed: number
-  aiCreditsLimit: number
+  ready: boolean
+  company: CompanyData | null
+  me: Employee | null
+  session: DB['session']
+  signup: SignupDraft | null
+  accounts: Account[]
+  can: (cap: Cap) => boolean
+  mutate: (fn: (c: CompanyData, ctx: MutateCtx) => void) => void
+  login: (email: string, password: string) => string | null
+  loginAs: (personId: string) => void
+  logout: () => void
+  setSignupDraft: (d: SignupDraft | null) => void
+  signupOwner: (input: { fullName: string; email: string; password: string; companyName: string }) => string | null
+  acceptInvite: (inviteId: string, input: { companyId: string; fullName: string; password: string; phone: string; location: string }) => string | null
+  findInvite: (inviteId: string) => { company: CompanyData; invite: CompanyData['invitations'][number] } | null
+  decide: (approvalId: string, decision: Decision, note?: string) => void
   spendAi: (opId: string, credits: number) => 'charged' | 'duplicate' | 'exhausted'
-  setAiExhausted: (v: boolean) => void
+  priv: PrivateState
+  setPriv: (fn: (p: PrivateState) => PrivateState) => void
+  resetDemo: () => void
+  loadSampleData: () => void
 }
 
 const StoreContext = createContext<Store | null>(null)
+const emptyPriv: PrivateState = { dossier: [], readNotifications: [] }
+
+/** Applies the business consequences of a completed approval round to its source record. */
+function applyOutcome(c: CompanyData, r: ApprovalRound, now: string) {
+  const approverIds = r.stages.flatMap((s) => s.decisions.map((d) => d.personId))
+  if (r.itemType === 'Proposal') {
+    const p = c.proposals.find((x) => x.id === r.itemId)
+    if (!p) return
+    if (r.status === 'Approved' && !p.converted) {
+      const author = c.employees.find((e) => e.id === p.authorId)
+      const sponsorId = approverIds.find((id) => id !== p.authorId) ?? p.authorId
+      const id = `PRJ-${String(++c.seq).padStart(4, '0')}`
+      const target = new Date(now.slice(0, 10))
+      target.setDate(target.getDate() + 90)
+      const dept = author?.dept ?? c.departments[0]?.id
+      c.projects.unshift({
+        id,
+        name: p.title,
+        purpose: [p.solution, p.benefit && `Expected benefit: ${p.benefit}`].filter(Boolean).join('\n\n'),
+        pmId: p.authorId,
+        sponsorId,
+        status: 'Planning',
+        members: [{ personId: p.authorId, role: 'Project manager', allocation: 100 }],
+        formerMembers: [],
+        productIds: p.productId && c.products.some((x) => x.id === p.productId) ? [p.productId] : [],
+        ownerDept: dept,
+        deptIds: dept ? [dept] : [],
+        start: now.slice(0, 10),
+        target: target.toISOString().slice(0, 10),
+        deliverables: [],
+        budget: p.budgetMode === 'cash' ? p.budgetDev : undefined,
+        approvers: { budget: approverIds, timeline: [sponsorId] },
+        stages: [
+          { name: 'Plan', ownerId: p.authorId, needs: 'Scope and plan agreed', approverIds: [sponsorId], status: 'Current' },
+          { name: 'Deliver', ownerId: p.authorId, needs: 'All activities accepted', approverIds: [sponsorId], status: 'Upcoming' },
+        ],
+        history: [{ at: now, by: 'system', text: `Created from approved proposal ${p.id} (${r.id})${p.timeline ? ` · proposed timeline: ${p.timeline}` : ''}` }],
+      })
+      p.status = 'Converted'
+      p.converted = { type: 'project', id, at: now }
+    }
+    if (r.status === 'Rejected') p.status = 'Rejected'
+    if (r.status === 'Changes requested') p.status = 'Changes requested'
+    p.updated = now.slice(0, 10)
+  }
+  if (r.itemType === 'Backlog item') {
+    const b = c.backlog.find((x) => x.id === r.itemId)
+    if (!b) return
+    if (r.status === 'Approved') {
+      b.status = b.projectIds.length ? 'In delivery' : 'Committed'
+      b.committedTarget = b.proposedTarget
+      b.committedBy = { ids: approverIds, at: now }
+      if (b.projectIds.length && !b.actualStart) b.actualStart = now.slice(0, 10)
+      b.history.push({ at: now, by: 'system', text: `Target ${b.proposedTarget} committed — approved by all ${approverIds.length} approvers` })
+    }
+    if (r.status === 'Changes requested') b.status = 'Changes requested'
+    if (r.status === 'Rejected') b.status = 'Rejected'
+  }
+  if (r.itemType === 'Expense') {
+    const e = c.expenses.find((x) => x.id === r.itemId)
+    if (!e) return
+    if (r.status === 'Approved') e.status = 'Approved · unpaid'
+    if (r.status === 'Changes requested') e.status = 'Changes requested'
+    if (r.status === 'Rejected') e.status = 'Rejected'
+    e.history.push({ at: now, by: 'system', text: `Approval ${r.id}: ${r.status}` })
+  }
+  if (r.itemType === 'Project stage') {
+    const p = c.projects.find((x) => x.id === r.itemId)
+    if (!p) return
+    const idx = p.stages.findIndex((s) => s.approvalId === r.id)
+    if (idx < 0) return
+    if (r.status === 'Approved') {
+      p.stages[idx].status = 'Done'
+      if (p.stages[idx + 1]) p.stages[idx + 1].status = 'Current'
+      else p.status = 'Closed'
+      p.history.push({ at: now, by: 'system', text: `Stage "${p.stages[idx].name}" approved by all required approvers — advanced` })
+    }
+    if (r.status !== 'Pending' && r.status !== 'Approved') p.stages[idx].approvalId = undefined
+  }
+  if (r.itemType === 'Project change') {
+    const p = c.projects.find((x) => x.id === r.itemId)
+    const ch = p?.pendingChange
+    if (!p || !ch || ch.approvalId !== r.id || r.status === 'Pending') return
+    if (r.status === 'Approved') {
+      const parts: string[] = []
+      if (ch.budget !== undefined) parts.push(`budget ${p.budget ?? 0} → ${ch.budget}`), (p.budget = ch.budget)
+      if (ch.target) parts.push(`target ${p.target} → ${ch.target}`), (p.target = ch.target)
+      p.history.unshift({ at: now, by: 'system', text: `Change approved (${r.id}): ${parts.join(', ')}` })
+    } else {
+      p.history.unshift({ at: now, by: 'system', text: `Change ${r.status.toLowerCase()} (${r.id}) — budget and target unchanged` })
+    }
+    p.pendingChange = undefined
+  }
+  if (r.itemType === 'Department budget') {
+    const d = c.departments.find((x) => x.id === r.itemId)
+    const ch = d?.pendingBudget
+    if (!d || !ch || ch.approvalId !== r.id || r.status === 'Pending') return
+    d.history ??= []
+    if (r.status === 'Approved') {
+      d.history.unshift({ at: now, by: 'system', text: `Budget change approved (${r.id}): ${d.budget ?? 0} → ${ch.budget}` })
+      d.budget = ch.budget
+    } else {
+      d.history.unshift({ at: now, by: 'system', text: `Budget change ${r.status.toLowerCase()} (${r.id})` })
+    }
+    d.pendingBudget = undefined
+  }
+  if (r.itemType === 'Release') {
+    const rel = c.releases.find((x) => x.id === r.itemId)
+    if (!rel) return
+    if (r.status === 'Approved') rel.status = 'Approved'
+    if (r.status === 'Changes requested' || r.status === 'Rejected') rel.status = 'Planned'
+    rel.history.push({ at: now, by: 'system', text: `Release approval ${r.id}: ${r.status}` })
+  }
+}
 
 export function AppStoreProvider({ children }: { children: React.ReactNode }) {
-  const [perspectiveId, setPerspective] = useState<PerspectiveId>('maya')
-  const [companyId, setCompanyId] = useState('co_comet_works')
-  const [activities, setActivities] = useState(initialActivities)
-  const [approvals, setApprovals] = useState(initialApprovals)
-  const [aiCreditsUsed, setUsed] = useState(7420)
-  const [aiCreditsLimit] = useState(10000)
-  const [settledOps, setSettledOps] = useState<string[]>([])
+  const [db, setDb] = useState<DB | null>(null)
+  const loaded = useRef(false)
 
-  const perspective = perspectives.find((p) => p.id === perspectiveId)!
-
-  const can = useCallback((cap: Capability) => perspective.caps.includes(cap), [perspective])
-
-  const updateActivity = useCallback((id: string, patch: Partial<Activity>) => {
-    setActivities((prev) => prev.map((a) => (a.id === id ? { ...a, ...patch, revision: a.revision + 1 } : a)))
+  useEffect(() => {
+    if (loaded.current) return
+    loaded.current = true
+    try {
+      const raw = window.localStorage.getItem(KEY)
+      const parsed = raw ? (JSON.parse(raw) as DB) : null
+      setDb(parsed && parsed.v === 2 ? parsed : seed())
+    } catch {
+      setDb(seed())
+    }
   }, [])
 
-  const decide = useCallback((approvalId: string, personId: string, decision: Decision, note?: string) => {
-    setApprovals((prev) =>
-      prev.map((r) => {
-        if (r.id !== approvalId) return r
-        const stages = r.stages.map((s) => ({
-          ...s,
-          decisions: s.decisions.map((d) =>
-            d.personId === personId && (d.decision === 'pending')
-              ? { ...d, decision, note, at: '2026-10-25 · just now' }
-              : d,
-          ),
-        }))
-        const all = stages.flatMap((s) => s.decisions)
-        let status: ApprovalRound['status'] = r.status
-        if (all.some((d) => d.decision === 'rejected')) status = 'Rejected'
-        else if (all.some((d) => d.decision === 'changes')) status = 'Changes requested'
-        else if (all.every((d) => d.decision === 'approved')) status = 'Approved'
-        // ordered stages: unlock next stage when previous is fully approved
-        const unlocked = stages.map((s, i) => {
-          if (i === 0) return s
-          const prevDone = stages[i - 1].decisions.every((d) => d.decision === 'approved')
-          return prevDone
-            ? { ...s, decisions: s.decisions.map((d) => (d.decision === 'blocked' ? { ...d, decision: 'pending' as Decision } : d)) }
-            : s
-        })
-        return { ...r, stages: unlocked, status }
+  useEffect(() => {
+    if (!db) return
+    const next = JSON.stringify(db)
+    if (window.localStorage.getItem(KEY) !== next) window.localStorage.setItem(KEY, next)
+  }, [db])
+
+  // Keeps every open tab (e.g. the org chart opened in a new tab) on the same record.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== KEY || !e.newValue) return
+      try {
+        const parsed = JSON.parse(e.newValue) as DB
+        if (parsed.v === 2) setDb(parsed)
+      } catch {}
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
+  const company = db?.session ? (db.companies[db.session.companyId] ?? null) : null
+  const me = company && db?.session ? (company.employees.find((e) => e.id === db.session!.personId) ?? null) : null
+  const caps = useMemo(() => capsFor(me ?? undefined), [me])
+  const can = useCallback((cap: Cap) => caps.includes(cap), [caps])
+  const privKey = db?.session ? `${db.session.companyId}:${db.session.personId}` : ''
+
+  const update = useCallback((fn: (d: DB) => void) => {
+    setDb((prev) => {
+      if (!prev) return prev
+      const next = structuredClone(prev)
+      fn(next)
+      return next
+    })
+  }, [])
+
+  const mutate = useCallback(
+    (fn: (c: CompanyData, ctx: MutateCtx) => void) => {
+      update((d) => {
+        if (!d.session) return
+        const c = d.companies[d.session.companyId]
+        const meNow = c.employees.find((e) => e.id === d.session!.personId)!
+        const now = nowStamp()
+        const ctx: MutateCtx = {
+          me: meNow,
+          now,
+          id: (prefix) => `${prefix}-${String(++c.seq).padStart(4, '0')}`,
+          audit: (action, target, detail = '') => c.audit.unshift({ id: `AUD-${++c.seq}`, at: now, actor: meNow.id, action, target, detail }),
+        }
+        fn(c, ctx)
+      })
+    },
+    [update],
+  )
+
+  const login = useCallback(
+    (email: string, password: string) => {
+      if (!db) return 'Not ready'
+      const acc = db.accounts.find((a) => a.email.toLowerCase() === email.trim().toLowerCase())
+      if (!acc || acc.password !== password) return 'Email or password is incorrect.'
+      const emp = db.companies[acc.companyId]?.employees.find((e) => e.id === acc.personId)
+      if (!emp || emp.status !== 'active') return 'This account is not active.'
+      update((d) => {
+        d.session = { personId: acc.personId, companyId: acc.companyId }
+      })
+      return null
+    },
+    [db, update],
+  )
+
+  const loginAs = useCallback(
+    (personId: string) =>
+      update((d) => {
+        d.session = { personId, companyId: 'co_comet_works' }
       }),
-    )
-  }, [])
+    [update],
+  )
+
+  const logout = useCallback(
+    () =>
+      update((d) => {
+        if (d.session) delete d.private[`${d.session.companyId}:${d.session.personId}`]
+        d.session = null
+      }),
+    [update],
+  )
+
+  const setSignupDraft = useCallback((s: SignupDraft | null) => update((d) => void (d.signup = s)), [update])
+
+  const signupOwner = useCallback(
+    (input: { fullName: string; email: string; password: string; companyName: string }) => {
+      if (!db) return 'Not ready'
+      const email = input.email.trim().toLowerCase()
+      if (db.accounts.some((a) => a.email.toLowerCase() === email)) return 'An account with this email already exists. Log in instead.'
+      const cid = `co_${Date.now().toString(36)}`
+      const pid = `own_${Date.now().toString(36)}`
+      update((d) => {
+        d.companies[cid] = freshCompany(cid, input.companyName.trim(), { id: pid, fullName: input.fullName.trim(), email, designation: 'Founder & Owner' }, d.signup?.packageId ?? 'pkg_business', '', '')
+        d.accounts.push({ email, password: input.password, personId: pid, companyId: cid })
+        d.session = { personId: pid, companyId: cid }
+      })
+      return null
+    },
+    [db, update],
+  )
+
+  const findInvite = useCallback(
+    (inviteId: string) => {
+      if (!db) return null
+      for (const company of Object.values(db.companies)) {
+        const invite = company.invitations.find((i) => i.id === inviteId)
+        if (invite) return { company, invite }
+      }
+      return null
+    },
+    [db],
+  )
+
+  const acceptInvite = useCallback(
+    (inviteId: string, input: { companyId: string; fullName: string; password: string; phone: string; location: string }) => {
+      if (!db) return 'Not ready'
+      const c = db.companies[input.companyId]
+      const inv = c?.invitations.find((i) => i.id === inviteId)
+      if (!inv) return 'Invitation not found.'
+      if (inv.status === 'Accepted') return 'This invitation has already been accepted. Log in instead.'
+      if (inv.status === 'Cancelled') return 'This invitation was cancelled by the company.'
+      if (inv.status === 'Expired' || inv.expiresAt < TODAY) return 'This invitation has expired. Ask the company to resend it.'
+      if (db.accounts.some((a) => a.email.toLowerCase() === inv.email.toLowerCase())) return 'This email is already a member. Log in instead.'
+      update((d) => {
+        const cc = d.companies[input.companyId]
+        const ii = cc.invitations.find((i) => i.id === inviteId)!
+        const now = nowStamp()
+        const pid = ii.vacancyId ?? `emp_${(++cc.seq).toString(36)}${Date.now().toString(36).slice(-3)}`
+        const record: Employee = {
+          id: pid,
+          fullName: input.fullName.trim() || ii.name,
+          designation: ii.designation,
+          dept: ii.dept,
+          email: ii.email,
+          status: 'active',
+          location: input.location || '—',
+          joined: ii.start || TODAY,
+          accessRole: ii.accessRole === 'owner' ? 'member' : ii.accessRole,
+          phone: input.phone,
+          invitationId: ii.id,
+        }
+        const existing = cc.employees.findIndex((e) => e.id === pid)
+        if (existing >= 0) cc.employees[existing] = record
+        else cc.employees.push(record)
+        const hasManager = cc.relationships.some((r) => r.from === pid && r.type === 'direct')
+        if (!hasManager && ii.managerId) cc.relationships.push({ id: `rel_${pid}`, from: pid, to: ii.managerId, type: 'direct', primary: true })
+        if (hasManager && ii.managerId) cc.relationships.forEach((r) => r.from === pid && r.type === 'direct' && (r.to = ii.managerId))
+        if (ii.functionalId) cc.relationships.push({ id: `rel_${pid}_f`, from: pid, to: ii.functionalId, type: 'functional' })
+        ii.status = 'Accepted'
+        ii.employeeId = pid
+        ii.history.push({ at: now, text: `Accepted by ${record.fullName} — employee activated` })
+        d.accounts.push({ email: ii.email, password: input.password, personId: pid, companyId: input.companyId })
+        d.session = { personId: pid, companyId: input.companyId }
+      })
+      return null
+    },
+    [db, update],
+  )
+
+  const decide = useCallback(
+    (approvalId: string, decision: Decision, note?: string) =>
+      mutate((c, { me: who, now }) => {
+        const r = c.approvals.find((x) => x.id === approvalId)
+        if (!r) return
+        let acted = false
+        r.stages.forEach((s) =>
+          s.decisions.forEach((d) => {
+            if (d.personId === who.id && d.decision === 'pending' && !acted) {
+              d.decision = decision
+              d.note = note
+              d.at = now
+              acted = true
+            }
+          }),
+        )
+        if (!acted) return
+        r.stages.forEach((s, i) => {
+          if (i === 0) return
+          if (r.stages[i - 1].decisions.every((d) => d.decision === 'approved')) s.decisions.forEach((d) => d.decision === 'blocked' && (d.decision = 'pending'))
+        })
+        const all = r.stages.flatMap((s) => s.decisions)
+        if (all.some((d) => d.decision === 'rejected')) r.status = 'Rejected'
+        else if (all.some((d) => d.decision === 'changes')) r.status = 'Changes requested'
+        else if (all.every((d) => d.decision === 'approved')) r.status = 'Approved'
+        r.history.push({ at: now, by: who.id, text: `${decision === 'approved' ? 'Approved' : decision === 'changes' ? 'Requested changes' : 'Rejected'}${note ? ` — ${note}` : ''}` })
+        if (r.status !== 'Pending') applyOutcome(c, r, now)
+      }),
+    [mutate],
+  )
 
   const spendAi = useCallback(
     (opId: string, credits: number) => {
-      if (settledOps.includes(opId)) return 'duplicate' as const
-      if (aiCreditsUsed + credits > aiCreditsLimit) return 'exhausted' as const
-      setSettledOps((p) => [...p, opId])
-      setUsed((u) => u + credits)
+      if (!company) return 'exhausted' as const
+      if (company.credits.ops.includes(opId)) return 'duplicate' as const
+      if (company.credits.used + credits > company.credits.limit) return 'exhausted' as const
+      mutate((c) => {
+        c.credits.ops.push(opId)
+        c.credits.used += credits
+      })
       return 'charged' as const
     },
-    [settledOps, aiCreditsUsed, aiCreditsLimit],
+    [company, mutate],
   )
 
-  const setAiExhausted = useCallback((v: boolean) => setUsed(v ? 10000 : 7420), [])
+  const priv = (db && privKey && db.private[privKey]) || emptyPriv
+  const setPriv = useCallback(
+    (fn: (p: PrivateState) => PrivateState) =>
+      update((d) => {
+        if (!d.session) return
+        const k = `${d.session.companyId}:${d.session.personId}`
+        d.private[k] = fn(d.private[k] ?? emptyPriv)
+      }),
+    [update],
+  )
+
+  const resetDemo = useCallback(() => setDb(seed()), [])
+
+  /**
+   * DEV ONLY — remove before production. Replaces the signed-in company's records with the
+   * full sample dataset (company name, founder/owner, people, org, finance, everything) and
+   * re-points the current login to the sample owner so the same credentials keep working.
+   */
+  const loadSampleData = useCallback(
+    () =>
+      update((d) => {
+        if (!d.session) return
+        const cid = d.session.companyId
+        const prevPersonId = d.session.personId
+        const sample = demoCompany()
+        sample.id = cid
+        sample.onboarding.done = true
+        const owner = sample.employees.find((e) => e.accessRole === 'owner') ?? sample.employees[0]
+        d.companies[cid] = sample
+        d.accounts.forEach((a) => {
+          if (a.companyId === cid && a.personId === prevPersonId) a.personId = owner.id
+        })
+        Object.keys(d.private).forEach((k) => k.startsWith(`${cid}:`) && delete d.private[k])
+        d.session = { companyId: cid, personId: owner.id }
+      }),
+    [update],
+  )
 
   const value = useMemo<Store>(
-    () => ({ perspective, setPerspective, companyId, setCompanyId, can, activities, updateActivity, approvals, decide, aiCreditsUsed, aiCreditsLimit, spendAi, setAiExhausted }),
-    [perspective, companyId, can, activities, updateActivity, approvals, decide, aiCreditsUsed, aiCreditsLimit, spendAi, setAiExhausted],
+    () => ({
+      ready: !!db,
+      company,
+      me,
+      session: db?.session ?? null,
+      signup: db?.signup ?? null,
+      accounts: db?.accounts ?? [],
+      can,
+      mutate,
+      login,
+      loginAs,
+      logout,
+      setSignupDraft,
+      signupOwner,
+      acceptInvite,
+      findInvite,
+      decide,
+      spendAi,
+      priv,
+      setPriv,
+      resetDemo,
+      loadSampleData,
+    }),
+    [db, company, me, can, mutate, login, loginAs, logout, setSignupDraft, signupOwner, acceptInvite, findInvite, decide, spendAi, priv, setPriv, resetDemo, loadSampleData],
   )
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>
@@ -132,3 +501,11 @@ export function useStore() {
   if (!ctx) throw new Error('useStore must be used within AppStoreProvider')
   return ctx
 }
+
+/** Hub screens only render inside the authenticated shell, so company/me are guaranteed. */
+export function useHub() {
+  const s = useStore()
+  return s as Store & { company: CompanyData; me: Employee }
+}
+
+export const packageById = (id: string) => packages.find((p) => p.id === id) ?? packages[2]

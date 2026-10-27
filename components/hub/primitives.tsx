@@ -1,23 +1,36 @@
+'use client'
+
 import Link from 'next/link'
 import { AlertTriangle, CheckCircle2, CircleDashed, Clock, Info, Lock, MinusCircle, PauseCircle, Unplug, XCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { deptById, empById, type Decision, type DeptId } from '@/lib/fixtures'
+import { deptColorCls, type Decision, type DeptId } from '@/lib/fixtures'
+import { useStore } from '@/lib/store'
+
+function useLookup() {
+  const { company } = useStore()
+  return {
+    emp: (id: string) => company?.employees.find((e) => e.id === id),
+    dept: (id: string) => company?.departments.find((d) => d.id === id),
+  }
+}
 
 export function Avatar({ id, size = 'md', className }: { id: string; size?: 'sm' | 'md' | 'lg'; className?: string }) {
-  const e = empById(id)
-  const d = e ? deptById(e.dept) : null
+  const { emp, dept } = useLookup()
+  const e = emp(id)
+  const d = e ? dept(e.dept) : null
   const initials = e ? (e.status === 'vacancy' ? '—' : e.fullName.split(' ').map((p) => p[0]).join('').slice(0, 2)) : '?'
   return (
     <span
       aria-hidden
       className={cn(
         'inline-flex shrink-0 items-center justify-center rounded-full font-medium text-primary-foreground',
-        d?.bgClass ?? 'bg-muted-foreground',
+        d ? deptColorCls[d.color].bg : 'bg-muted-foreground',
         e?.status === 'vacancy' && 'border border-dashed border-muted-foreground bg-transparent text-muted-foreground',
         e?.status === 'inactive' && 'opacity-50',
         size === 'sm' && 'size-6 text-[10px]',
         size === 'md' && 'size-8 text-xs',
         size === 'lg' && 'size-14 text-lg',
+        e?.status === 'invited' && 'opacity-60',
         className,
       )}
     >
@@ -27,7 +40,8 @@ export function Avatar({ id, size = 'md', className }: { id: string; size?: 'sm'
 }
 
 export function PersonLink({ id, showRole = false }: { id: string; showRole?: boolean }) {
-  const e = empById(id)
+  const { emp } = useLookup()
+  const e = emp(id)
   if (!e) return <span className="text-muted-foreground">Unknown</span>
   return (
     <Link href={`/employees/${e.id}`} className="inline-flex items-center gap-2 rounded-sm hover:underline">
@@ -44,12 +58,14 @@ export function PersonLink({ id, showRole = false }: { id: string; showRole?: bo
 }
 
 export function DeptTag({ id, className }: { id: DeptId; className?: string }) {
-  const d = deptById(id)
+  const { dept } = useLookup()
+  const d = dept(id)
+  if (!d) return <span className="text-xs text-muted-foreground">—</span>
   return (
-    <span className={cn('inline-flex items-center gap-1.5 text-xs text-foreground', className)}>
-      <span aria-hidden className={cn('size-2 rounded-[2px]', d.bgClass)} />
+    <Link href={`/departments/${d.id}`} className={cn('inline-flex items-center gap-1.5 text-xs text-foreground hover:underline', className)}>
+      <span aria-hidden className={cn('size-2 rounded-[2px]', deptColorCls[d.color].bg)} />
       {d.name}
-    </span>
+    </Link>
   )
 }
 
@@ -171,7 +187,7 @@ export function Panel({ title, action, children, className, description }: { tit
           {action}
         </header>
       )}
-      <div className="flex flex-1 flex-col">{children}</div>
+      <div className="flex flex-1 flex-col p-4">{children}</div>
     </section>
   )
 }

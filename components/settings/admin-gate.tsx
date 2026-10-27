@@ -1,17 +1,11 @@
 'use client'
 
 import type { ReactNode } from 'react'
-import { useStore } from '@/lib/store'
-import { Callout } from '@/components/hub/primitives'
+import { useHub } from '@/lib/store'
+import { StateBlock } from '@/components/hub/page'
 
 export function AdminGate({ children }: { children: ReactNode }) {
-  const { can } = useStore()
-  if (!can('settings.manage')) {
-    return (
-      <Callout tone="muted" title="Administrators only">
-        This area needs the settings management permission. Switch to Maya Okafor to review it.
-      </Callout>
-    )
-  }
+  const { can } = useHub()
+  if (!can('settings')) return <StateBlock title="Administrators only" body="This area requires the company owner or an administrator. No settings are shown." />
   return <>{children}</>
 }

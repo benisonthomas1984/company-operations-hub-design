@@ -1,456 +1,465 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ChevronDown, ChevronRight, Maximize2, Minus, Plus, RotateCcw, Save, Search, X } from 'lucide-react'
+import { ExternalLink, Minus, Network, Plus, SlidersHorizontal, Trash2, UserPlus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
-import { departments, employees, relationships, relLabel, type DeptId, type Employee, type Relationship, type RelType } from '@/lib/fixtures'
-import { useStore } from '@/lib/store'
+import { useHub } from '@/lib/store'
+import { deptColorCls, relLabel, type CompanyData, type Employee, type RelType } from '@/lib/fixtures'
+import { CARD_H, CARD_W, assignToPosition, descendants, directManager, isRemovable, placed, positionLabel, removePosition, setDirectManager, treeLayout } from '@/lib/org-ops'
+import { Select, TextInput } from '@/components/hub/form'
 import { cn } from '@/lib/utils'
-import { Avatar, DeptTag, StatusPill } from '@/components/hub/primitives'
 
-const CW = 184
-const CH = 56
-const GAP = 12
-const PAD = 16
-const HEAD = 30
-const COL_W = CW * 2 + GAP + PAD * 2
-const COL_GAP = 36
-const TOP_Y = 40
-const DEPT_Y = 220
-
-type Pos = Record<string, { x: number; y: number }>
-
-function buildPeople(scale: boolean): { people: Employee[]; rels: Relationship[] } {
-  if (!scale) return { people: employees, rels: relationships }
-  const extra: Employee[] = []
-  const extraRels: Relationship[] = []
-  const per = 47
-  departments
-    .filter((d) => d.isDepartment)
-    .forEach((d) => {
-      for (let i = 1; i <= per; i++) {
-        const id = `gen_${d.id}_${i}`
-        extra.push({ id, name: `${d.name} ${i}`, fullName: `${d.name} Member ${String(i).padStart(2, '0')}`, designation: 'Team member (scale fixture)', dept: d.id, email: '', status: 'active', location: '—', joined: '—', responsibilities: [] })
-        extraRels.push({ id: `rel_${id}`, from: id, to: d.leadId, type: 'direct', primary: true })
-      }
-    })
-  return { people: [...employees, ...extra], rels: [...relationships, ...extraRels] }
+const relStyle: Record<RelType, { stroke: string; dash?: string }> = {
+  direct: { stroke: 'var(--foreground)' },
+  project: { stroke: 'var(--info)', dash: '6 4' },
+  functional: { stroke: 'var(--muted-foreground)', dash: '2 4' },
 }
 
-function initialLayout(people: Employee[]): Pos {
-  const pos: Pos = {}
-  const depts = departments.filter((d) => d.isDepartment)
-  const totalW = depts.length * COL_W + (depts.length - 1) * COL_GAP
-  const execX = totalW / 2 - (CW * 2 + GAP) / 2
-  pos.maya = { x: execX, y: TOP_Y + HEAD }
-  pos.ravi = { x: execX + CW + GAP, y: TOP_Y + HEAD }
-  depts.forEach((d, i) => {
-    const colX = i * (COL_W + COL_GAP) + PAD
-    const lead = d.leadId
-    pos[lead] = { x: colX + (CW + GAP) / 2, y: DEPT_Y + HEAD }
-    const members = people.filter((e) => e.dept === d.id && e.id !== lead)
-    members.forEach((m, j) => {
-      pos[m.id] = { x: colX + (j % 2) * (CW + GAP), y: DEPT_Y + HEAD + (CH + GAP) * (1 + Math.floor(j / 2)) + 8 }
-    })
-  })
-  return pos
-}
+export const defaultLayout = treeLayout
 
-const relStyle: Record<RelType, { stroke: string; dash?: string; width: number }> = {
-  direct: { stroke: 'var(--muted-foreground)', width: 1.25 },
-  project: { stroke: 'var(--info)', dash: '6 4', width: 1.5 },
-  functional: { stroke: 'var(--warning)', dash: '2 4', width: 1.5 },
-}
+export function OrgCanvas({ compact = false, fullscreen = false }: { compact?: boolean; fullscreen?: boolean }) {
+  const { company: c, can, mutate } = useHub()
+  const canEdit = can('org.edit')
+  const [zoom, setZoom] = useState(compact ? 0.8 : 0.9)
+  const [selId, setSelId] = useState<string | null>(null)
+  const [showTypes, setShowTypes] = useState<Record<RelType, boolean>>({ direct: true, project: true, functional: true })
+  const [localPos, setLocalPos] = useState<Record<string, { x: number; y: number }>>({})
+  const drag = useRef<{ id: string; dx: number; dy: number; moved: boolean } | null>(null)
+  const svgRef = useRef<SVGSVGElement>(null)
 
-export function OrgCanvas() {
-  const { can } = useStore()
-  const canEditRelationships = can('org.edit')
-  const [scaleFixture, setScaleFixture] = useState(false)
-  const { people, rels } = useMemo(() => buildPeople(scaleFixture), [scaleFixture])
-  const [pos, setPos] = useState<Pos>(() => initialLayout(employees))
-  const [dirty, setDirty] = useState(false)
-  const [zoom, setZoom] = useState(0.85)
-  const [collapsed, setCollapsed] = useState<DeptId[]>([])
-  const [types, setTypes] = useState<RelType[]>(['direct', 'project', 'functional'])
-  const [selected, setSelected] = useState<string | null>('ana')
-  const [query, setQuery] = useState('')
-  const [view, setView] = useState({ left: 0, top: 0, w: 1, h: 1 })
-  const scroller = useRef<HTMLDivElement>(null)
-  const drag = useRef<{ id: string; sx: number; sy: number; ox: number; oy: number; moved: boolean } | null>(null)
+  const people = placed(c)
+  const base = useMemo(() => treeLayout(c), [c])
+  const posOf = (id: string) => localPos[id] ?? c.layout[id] ?? base[id] ?? { x: 0, y: 0 }
+  const maxX = Math.max(900, ...people.map((p) => posOf(p.id).x + CARD_W + 40))
+  const maxY = Math.max(420, ...people.map((p) => posOf(p.id).y + CARD_H + 60))
+  const rels = c.relationships.filter((r) => showTypes[r.type] && people.some((p) => p.id === r.from) && people.some((p) => p.id === r.to))
+  const sel = people.find((p) => p.id === selId)
+  const [toolsOpen, setToolsOpen] = useState(false)
+  const showToolbar = !fullscreen || toolsOpen
+  const showPanel = !fullscreen || !!sel
 
-  useEffect(() => {
-    setPos(initialLayout(people))
-    if (scaleFixture) {
-      setCollapsed(['mkt', 'sup', 'hr', 'fin'])
-      setZoom(0.55)
-    } else {
-      setCollapsed([])
-    }
-  }, [people, scaleFixture])
-
-  const hiddenIds = useMemo(() => {
-    const set = new Set<string>()
-    people.forEach((p) => {
-      const d = departments.find((x) => x.id === p.dept)
-      if (d && collapsed.includes(d.id) && p.id !== d.leadId) set.add(p.id)
-    })
-    return set
-  }, [people, collapsed])
-
-  const visiblePeople = people.filter((p) => !hiddenIds.has(p.id) && pos[p.id])
-
-  const containers = useMemo(() => {
-    return departments.map((d) => {
-      const members = visiblePeople.filter((p) => p.dept === d.id)
-      if (!members.length) return null
-      const xs = members.map((m) => pos[m.id].x)
-      const ys = members.map((m) => pos[m.id].y)
-      const x = Math.min(...xs) - PAD
-      const y = Math.min(...ys) - HEAD
-      const w = Math.max(...xs) + CW + PAD - x
-      const h = Math.max(...ys) + CH + PAD - y
-      const total = people.filter((p) => p.dept === d.id).length
-      return { d, x, y, w: Math.max(w, CW + PAD * 2), h, total }
-    }).filter(Boolean) as { d: (typeof departments)[number]; x: number; y: number; w: number; h: number; total: number }[]
-  }, [visiblePeople, pos, people])
-
-  const bounds = useMemo(() => {
-    const maxX = Math.max(...containers.map((c) => c.x + c.w), 800) + 60
-    const maxY = Math.max(...containers.map((c) => c.y + c.h), 600) + 60
-    return { w: maxX, h: maxY }
-  }, [containers])
-
-  const lines = rels.filter((r) => types.includes(r.type) && !hiddenIds.has(r.from) && !hiddenIds.has(r.to) && pos[r.from] && pos[r.to])
-
-  const onPointerDown = (e: React.PointerEvent, id: string) => {
-    if (e.button !== 0) return
-    ;(e.target as HTMLElement).setPointerCapture?.(e.pointerId)
-    drag.current = { id, sx: e.clientX, sy: e.clientY, ox: pos[id].x, oy: pos[id].y, moved: false }
+  const toCanvas = (e: React.PointerEvent) => {
+    const rect = svgRef.current!.getBoundingClientRect()
+    return { x: (e.clientX - rect.left) / zoom, y: (e.clientY - rect.top) / zoom }
   }
-  const onPointerMove = (e: React.PointerEvent) => {
-    const d = drag.current
-    if (!d) return
-    const dx = (e.clientX - d.sx) / zoom
-    const dy = (e.clientY - d.sy) / zoom
-    if (Math.abs(dx) + Math.abs(dy) > 3) d.moved = true
-    if (d.moved) {
-      setPos((p) => ({ ...p, [d.id]: { x: Math.max(0, d.ox + dx), y: Math.max(0, d.oy + dy) } }))
-      setDirty(true)
-    }
+  const onDown = (e: React.PointerEvent, id: string) => {
+    const p = toCanvas(e)
+    const cur = posOf(id)
+    drag.current = { id, dx: p.x - cur.x, dy: p.y - cur.y, moved: false }
+    ;(e.target as Element).setPointerCapture(e.pointerId)
   }
-  const onPointerUp = () => {
+  const onMove = (e: React.PointerEvent) => {
+    if (!drag.current) return
+    const p = toCanvas(e)
+    drag.current.moved = true
+    const { id, dx, dy } = drag.current
+    setLocalPos((s) => ({ ...s, [id]: { x: Math.max(0, p.x - dx), y: Math.max(0, p.y - dy) } }))
+  }
+  const onUp = () => {
     const d = drag.current
     drag.current = null
-    if (d && !d.moved) setSelected(d.id)
+    if (!d) return
+    if (!d.moved) return setSelId(d.id)
+    const next = localPos[d.id]
+    if (canEdit && next) {
+      mutate((co) => void (co.layout[d.id] = next))
+      setLocalPos(({ [d.id]: _omit, ...rest }) => rest)
+    }
   }
 
-  const nudge = (id: string, dx: number, dy: number) => {
-    setPos((p) => ({ ...p, [id]: { x: Math.max(0, p[id].x + dx), y: Math.max(0, p[id].y + dy) } }))
-    setDirty(true)
+  const autoArrange = () => {
+    mutate((co) => {
+      co.layout = treeLayout(co)
+    })
+    setLocalPos({})
+    toast.success('Chart arranged by reporting line')
   }
 
-  const focusPerson = useCallback(
-    (id: string) => {
-      const p = people.find((x) => x.id === id)
-      if (!p) return
-      setCollapsed((c) => c.filter((x) => x !== p.dept))
-      setSelected(id)
-      requestAnimationFrame(() => {
-        const el = scroller.current
-        const pp = pos[id]
-        if (el && pp) el.scrollTo({ left: pp.x * zoom - el.clientWidth / 2 + (CW * zoom) / 2, top: pp.y * zoom - el.clientHeight / 2, behavior: 'smooth' })
-        document.getElementById(`card-${id}`)?.focus({ preventScroll: true })
-      })
-    },
-    [people, pos, zoom],
-  )
-
-  const matches = query.trim() ? people.filter((p) => p.fullName.toLowerCase().includes(query.toLowerCase()) || p.designation.toLowerCase().includes(query.toLowerCase())).slice(0, 6) : []
-
-  const onScroll = () => {
-    const el = scroller.current
-    if (el) setView({ left: el.scrollLeft / zoom, top: el.scrollTop / zoom, w: el.clientWidth / zoom, h: el.clientHeight / zoom })
+  const addPosition = (mode: 'child' | 'peer') => {
+    let newId = ''
+    mutate((co, { id, audit, me }) => {
+      newId = id('vac')
+      const selected = selId ? co.employees.find((e) => e.id === selId) : undefined
+      const owner = co.employees.find((e) => e.accessRole === 'owner') || me
+      let parent: Employee | undefined
+      if (mode === 'peer' && selected) {
+        const mgrId = co.relationships.find((r) => r.type === 'direct' && r.from === selected.id)?.to
+        parent = mgrId ? co.employees.find((e) => e.id === mgrId) : undefined
+      } else {
+        parent = selected || owner
+      }
+      const dept = (mode === 'peer' ? selected?.dept : parent?.dept) || co.departments[0]?.id || ''
+      co.employees.push({ id: newId, fullName: 'Open position', designation: 'New position', dept, email: '', status: 'vacancy', location: '—', joined: '', accessRole: 'member' })
+      if (parent) setDirectManager(co, newId, parent.id)
+      const hasManual = Object.keys(co.layout).length > 0
+      if (hasManual && parent) {
+        const pp = co.layout[parent.id] ?? treeLayout(co)[parent.id]
+        const siblings = co.relationships.filter((r) => r.type === 'direct' && r.to === parent.id).length
+        if (pp) co.layout[newId] = { x: pp.x + (siblings - 1) * (CARD_W + 24), y: pp.y + 120 }
+      } else if (hasManual && selected) {
+        const sp = co.layout[selected.id] ?? treeLayout(co)[selected.id]
+        if (sp) co.layout[newId] = { x: sp.x + CARD_W + 24, y: sp.y }
+      }
+      audit('Added position', newId, parent ? `Reports to ${parent.designation}` : 'Top level')
+    })
+    setSelId(newId)
   }
-  useEffect(onScroll, [zoom])
-
-  const sel = selected ? people.find((p) => p.id === selected) : null
-  const selRels = sel ? rels.filter((r) => r.from === sel.id || r.to === sel.id) : []
-  const mmScale = 200 / bounds.w
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative w-full max-w-xs">
-          <Search aria-hidden className="absolute left-2.5 top-2 size-4 text-muted-foreground" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229 && matches[0]) {
-                focusPerson(matches[0].id)
-                setQuery('')
-              }
-            }}
-            placeholder="Find a person on the canvas"
-            aria-label="Find a person on the canvas"
-            className="h-8 w-full rounded-md border border-input bg-card pl-8 pr-2 text-sm outline-none focus:border-ring"
-          />
-          {matches.length > 0 && (
-            <ul className="absolute z-20 mt-1 w-full rounded-md border border-border bg-popover p-1 shadow-md">
-              {matches.map((m) => (
-                <li key={m.id}>
-                  <button
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-accent"
-                    onClick={() => {
-                      focusPerson(m.id)
-                      setQuery('')
-                    }}
-                  >
-                    <Avatar id={m.id} size="sm" />
-                    <span className="truncate">{m.fullName}</span>
-                    <span className="ml-auto truncate text-xs text-muted-foreground">{m.designation}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <fieldset className="flex items-center gap-1 rounded-md border border-border bg-card p-0.5">
-          <legend className="sr-only">Relationship types</legend>
-          {(Object.keys(relLabel) as RelType[]).map((t) => {
-            const on = types.includes(t)
-            return (
-              <button
-                key={t}
-                type="button"
-                aria-pressed={on}
-                onClick={() => setTypes((x) => (on ? x.filter((y) => y !== t) : [...x, t]))}
-                className={cn('flex items-center gap-1.5 rounded px-2 py-1 text-xs', on ? 'bg-accent text-foreground' : 'text-muted-foreground')}
-              >
-                <svg width="22" height="6" aria-hidden>
-                  <line x1="0" y1="3" x2="22" y2="3" stroke={relStyle[t].stroke} strokeWidth="2" strokeDasharray={relStyle[t].dash} />
-                </svg>
-                {relLabel[t]}
-              </button>
-            )
-          })}
-        </fieldset>
-
-        <div className="flex items-center gap-1 rounded-md border border-border bg-card p-0.5">
-          <Button variant="ghost" size="icon-sm" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.35, +(z - 0.1).toFixed(2)))}>
-            <Minus />
-          </Button>
-          <span className="w-10 text-center font-mono text-xs" aria-live="polite">
-            {Math.round(zoom * 100)}%
-          </span>
-          <Button variant="ghost" size="icon-sm" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(1.5, +(z + 0.1).toFixed(2)))}>
-            <Plus />
-          </Button>
-          <Button variant="ghost" size="icon-sm" aria-label="Fit to screen" onClick={() => scroller.current && setZoom(Math.max(0.35, Math.min(1.2, scroller.current.clientWidth / bounds.w)))}>
-            <Maximize2 />
-          </Button>
-        </div>
-
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <input type="checkbox" checked={scaleFixture} onChange={(e) => setScaleFixture(e.target.checked)} />
-          250-employee scale fixture
-        </label>
-
-        <div className="ml-auto flex items-center gap-2">
-          {dirty && <span className="text-xs text-warning">Unsaved layout</span>}
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!dirty}
-            onClick={() => {
-              setPos(initialLayout(people))
-              setDirty(false)
-            }}
+    <div
+      className={cn(
+        'flex flex-col overflow-hidden bg-card',
+        fullscreen ? 'h-full' : 'rounded-lg border border-border',
+        !fullscreen && (compact ? 'h-[600px]' : 'h-[calc(100dvh-14rem)] min-h-[560px]'),
+      )}
+    >
+      {showToolbar && (
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+        {!fullscreen && (
+          <a
+            href="/org-chart"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="order-last ml-auto inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-sm font-medium hover:bg-muted"
           >
-            <RotateCcw /> Reset
-          </Button>
-          <Button
-            size="sm"
-            disabled={!dirty}
-            onClick={() => {
-              setDirty(false)
-              toast.success('Layout saved', { description: 'Card positions saved as layout v2. Reporting relationships are unchanged.' })
-            }}
-          >
-            <Save /> Save layout
-          </Button>
+            <ExternalLink className="size-4" aria-hidden="true" />
+            Open in new tab
+            <span className="sr-only">(opens a new tab)</span>
+          </a>
+        )}
+        <div className="flex items-center rounded-md border border-border bg-card">
+          <button type="button" className="p-1.5 hover:bg-muted" onClick={() => setZoom((z) => Math.max(0.4, +(z - 0.1).toFixed(2)))} aria-label="Zoom out">
+            <Minus className="size-4" />
+          </button>
+          <span className="w-12 text-center font-mono text-xs">{Math.round(zoom * 100)}%</span>
+          <button type="button" className="p-1.5 hover:bg-muted" onClick={() => setZoom((z) => Math.min(1.6, +(z + 0.1).toFixed(2)))} aria-label="Zoom in">
+            <Plus className="size-4" />
+          </button>
         </div>
+        {(Object.keys(relLabel) as RelType[]).map((t) => (
+          <label key={t} className="flex items-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs">
+            <input type="checkbox" checked={showTypes[t]} onChange={(e) => setShowTypes((s) => ({ ...s, [t]: e.target.checked }))} />
+            <svg width="18" height="6" aria-hidden>
+              <line x1="0" y1="3" x2="18" y2="3" stroke={relStyle[t].stroke} strokeWidth="2" strokeDasharray={relStyle[t].dash} />
+            </svg>
+            {relLabel[t]}
+          </label>
+        ))}
+        {canEdit && (
+          <div className="ml-auto flex items-center gap-2">
+            <Button size="sm" variant="outline" onClick={autoArrange}>
+              <Network /> Auto-arrange
+            </Button>
+            {sel ? (
+              <>
+                <Button size="sm" variant="outline" onClick={() => addPosition('peer')}>
+                  <UserPlus /> Add alongside {sel.designation}
+                </Button>
+                <Button size="sm" onClick={() => addPosition('child')}>
+                  <UserPlus /> Add under {sel.designation}
+                </Button>
+              </>
+            ) : (
+              <Button size="sm" onClick={() => addPosition('child')}>
+                <UserPlus /> Add position
+              </Button>
+            )}
+          </div>
+        )}
       </div>
+      )}
 
-      <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[1fr_300px]">
-        <div className="relative min-h-[560px] overflow-hidden rounded-lg border border-border bg-canvas">
-          <div ref={scroller} onScroll={onScroll} className="canvas-grid absolute inset-0 overflow-auto" onPointerMove={onPointerMove} onPointerUp={onPointerUp}>
-            <div style={{ width: bounds.w * zoom, height: bounds.h * zoom }} className="relative">
-              <div style={{ transform: `scale(${zoom})`, transformOrigin: '0 0', width: bounds.w, height: bounds.h }} className="absolute left-0 top-0">
-                {containers.map(({ d, x, y, w, h, total }) => {
-                  const isCollapsed = collapsed.includes(d.id)
-                  return (
-                    <div key={d.id} style={{ left: x, top: y, width: w, height: h }} className={cn('absolute rounded-lg border bg-card/70', d.borderClass)}>
-                      <div className="flex h-7 items-center gap-1.5 px-2">
-                        <button
-                          type="button"
-                          aria-expanded={!isCollapsed}
-                          aria-label={`${isCollapsed ? 'Expand' : 'Collapse'} ${d.name}`}
-                          onClick={() => setCollapsed((c) => (isCollapsed ? c.filter((x) => x !== d.id) : [...c, d.id]))}
-                          className="rounded p-0.5 hover:bg-muted"
-                          disabled={!d.isDepartment}
-                        >
-                          {isCollapsed ? <ChevronRight className="size-3.5" /> : <ChevronDown className="size-3.5" />}
-                        </button>
-                        <span aria-hidden className={cn('size-2 rounded-[2px]', d.bgClass)} />
-                        <span className={cn('text-xs font-semibold', d.colorClass)}>{d.name}</span>
-                        <span className="text-[11px] text-muted-foreground">
-                          {total} {total === 1 ? 'person' : 'people'}
-                          {isCollapsed && ` · ${total - 1} hidden`}
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })}
-
-                <svg width={bounds.w} height={bounds.h} className="pointer-events-none absolute left-0 top-0" aria-hidden>
-                  {lines.map((r) => {
-                    const a = pos[r.from]
-                    const b = pos[r.to]
-                    const x1 = a.x + CW / 2
-                    const y1 = a.y
-                    const x2 = b.x + CW / 2
-                    const y2 = b.y + CH
-                    const hl = selected && (r.from === selected || r.to === selected)
-                    const st = relStyle[r.type]
-                    const midY = y2 + (y1 - y2) / 2
-                    const path = r.type === 'direct' && y1 > y2 ? `M${x1},${y1} V${midY} H${x2} V${y2}` : `M${x1},${y1} C${x1},${y1 - 60} ${x2},${y2 + 60} ${x2},${y2}`
-                    return <path key={r.id} d={path} fill="none" stroke={hl ? 'var(--foreground)' : st.stroke} strokeWidth={hl ? st.width + 1 : st.width} strokeDasharray={st.dash} opacity={selected && !hl ? 0.35 : 0.9} />
-                  })}
-                </svg>
-
-                {visiblePeople.map((p) => {
-                  const pp = pos[p.id]
-                  const isSel = selected === p.id
-                  return (
+      <div className="relative flex min-h-0 flex-1 flex-col lg:flex-row">
+        {fullscreen && (
+          <Button
+            size="sm"
+            variant={toolsOpen ? 'secondary' : 'outline'}
+            className="absolute bottom-4 left-4 z-10 bg-card shadow-sm"
+            onClick={() => setToolsOpen((o) => !o)}
+            aria-expanded={toolsOpen}
+          >
+            <SlidersHorizontal /> {toolsOpen ? 'Hide tools' : 'Show tools'}
+          </Button>
+        )}
+        <div className="min-h-72 flex-1 overflow-auto bg-muted/40 [background-image:radial-gradient(var(--border)_1px,transparent_1px)] [background-size:20px_20px]" onClick={(e) => e.target === e.currentTarget && setSelId(null)}>
+          <svg
+            ref={svgRef}
+            width={maxX * zoom}
+            height={maxY * zoom}
+            onPointerMove={onMove}
+            onPointerUp={onUp}
+            role="group"
+            aria-label="Organization canvas. Use the list view for a keyboard-friendly alternative."
+            className="touch-none select-none"
+          >
+            <g transform={`scale(${zoom})`}>
+              {rels.map((r) => {
+                const a = posOf(r.from)
+                const b = posOf(r.to)
+                const x1 = a.x + CARD_W / 2
+                const x2 = b.x + CARD_W / 2
+                const y2 = b.y + CARD_H
+                const mid = (a.y + y2) / 2
+                const on = selId && (r.from === selId || r.to === selId)
+                return (
+                  <path
+                    key={r.id}
+                    d={`M${x1},${a.y} C${x1},${mid} ${x2},${mid} ${x2},${y2}`}
+                    fill="none"
+                    stroke={relStyle[r.type].stroke}
+                    strokeDasharray={relStyle[r.type].dash}
+                    strokeWidth={on ? 2.5 : 1.25}
+                    opacity={selId && !on ? 0.15 : 0.7}
+                  />
+                )
+              })}
+              {people.map((p) => {
+                const pos = posOf(p.id)
+                const d = c.departments.find((x) => x.id === p.dept)
+                const vac = p.status === 'vacancy'
+                return (
+                  <foreignObject key={p.id} x={pos.x} y={pos.y} width={CARD_W} height={CARD_H}>
                     <button
-                      key={p.id}
-                      id={`card-${p.id}`}
                       type="button"
-                      style={{ left: pp.x, top: pp.y, width: CW, height: CH }}
-                      onPointerDown={(e) => onPointerDown(e, p.id)}
+                      onPointerDown={(e) => onDown(e, p.id)}
                       onKeyDown={(e) => {
-                        if (e.altKey && e.key.startsWith('Arrow')) {
+                        if (e.key === 'Enter' || e.key === ' ') {
                           e.preventDefault()
-                          const step = 12
-                          nudge(p.id, e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0, e.key === 'ArrowUp' ? -step : e.key === 'ArrowDown' ? step : 0)
-                        } else if (e.key === 'Enter' || e.key === ' ') {
-                          e.preventDefault()
-                          setSelected(p.id)
+                          setSelId(p.id)
                         }
                       }}
-                      aria-label={`${p.fullName}, ${p.designation}. Press Enter for relationships; Alt+Arrow keys to move.`}
-                      aria-pressed={isSel}
+                      aria-pressed={p.id === selId}
+                      aria-label={`${p.designation}, ${vac ? 'open position' : p.fullName}`}
                       className={cn(
-                        'absolute flex cursor-grab touch-none items-center gap-2 rounded-md border bg-card px-2 text-left shadow-xs select-none active:cursor-grabbing',
-                        isSel ? 'border-foreground ring-2 ring-ring/40' : 'border-border hover:border-ring',
-                        p.status === 'vacancy' && 'border-dashed bg-transparent',
-                        p.status === 'inactive' && 'opacity-60',
+                        'flex h-full w-full cursor-grab items-center gap-2 rounded-md border bg-card px-2.5 text-left shadow-sm active:cursor-grabbing',
+                        vac ? 'border-dashed border-muted-foreground/50 bg-muted' : 'border-border',
+                        p.id === selId && 'ring-2 ring-ring',
+                        p.status === 'invited' && 'border-warning',
                       )}
                     >
-                      <Avatar id={p.id} size="sm" />
-                      <span className="flex min-w-0 flex-col leading-tight">
-                        <span className="truncate text-xs font-medium text-foreground">{p.status === 'vacancy' ? 'Vacancy' : p.fullName}</span>
-                        <span className="truncate text-[11px] text-muted-foreground">{p.designation}</span>
+                      <span aria-hidden className={cn('h-9 w-1 shrink-0 rounded-full', d ? deptColorCls[d.color].bg : 'bg-muted')} />
+                      <span className="flex min-w-0 flex-col">
+                        <span className="truncate text-[13px] font-medium text-foreground">{p.designation}</span>
+                        <span className={cn('truncate text-[11px]', vac ? 'italic text-muted-foreground' : 'text-muted-foreground')}>
+                          {vac ? 'Open — unassigned' : p.fullName}
+                          {p.status === 'invited' && ' · invited'}
+                        </span>
                       </span>
                     </button>
-                  )
-                })}
-              </div>
-            </div>
-          </div>
-
-          <div className="absolute bottom-3 left-3 rounded-md border border-border bg-card/95 p-1.5 shadow-sm" aria-hidden>
-            <svg width={200} height={bounds.h * mmScale} className="block cursor-pointer" onClick={(e) => {
-              const r = (e.currentTarget as SVGElement).getBoundingClientRect()
-              const x = (e.clientX - r.left) / mmScale
-              const y = (e.clientY - r.top) / mmScale
-              scroller.current?.scrollTo({ left: x * zoom - (scroller.current.clientWidth / 2), top: y * zoom - (scroller.current.clientHeight / 2), behavior: 'smooth' })
-            }}>
-              {containers.map((c) => (
-                <rect key={c.d.id} x={c.x * mmScale} y={c.y * mmScale} width={c.w * mmScale} height={c.h * mmScale} rx={2} className={c.d.colorClass} fill="currentColor" opacity={0.25} />
-              ))}
-              <rect x={view.left * mmScale} y={view.top * mmScale} width={view.w * mmScale} height={view.h * mmScale} fill="none" stroke="var(--foreground)" strokeWidth={1} />
-            </svg>
-          </div>
+                  </foreignObject>
+                )
+              })}
+            </g>
+          </svg>
         </div>
 
-        <aside className="flex flex-col gap-3 rounded-lg border border-border bg-card p-4" aria-label="Relationship details">
+        {showPanel && (
+        <aside
+          aria-label="Selected position"
+          className={cn(
+            'flex shrink-0 flex-col gap-4 overflow-y-auto bg-card p-4',
+            fullscreen
+              ? 'absolute inset-y-0 right-0 z-20 w-full max-w-sm border-l border-border shadow-lg'
+              : 'w-full border-t border-border lg:w-80 lg:border-l lg:border-t-0',
+          )}
+        >
+          {fullscreen && (
+            <button
+              type="button"
+              onClick={() => setSelId(null)}
+              className="-mb-2 self-end rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Close position details"
+            >
+              <X className="size-4" />
+            </button>
+          )}
           {sel ? (
-            <>
-              <div className="flex items-start gap-3">
-                <Avatar id={sel.id} size="lg" />
-                <div className="flex min-w-0 flex-1 flex-col gap-1">
-                  <h2 className="truncate text-base font-semibold text-foreground">{sel.status === 'vacancy' ? 'Vacancy' : sel.fullName}</h2>
-                  <p className="text-sm text-muted-foreground">{sel.designation}</p>
-                  <DeptTag id={sel.dept} />
-                </div>
-                <button type="button" onClick={() => setSelected(null)} aria-label="Close details" className="rounded p-1 hover:bg-muted">
-                  <X className="size-4" />
-                </button>
-              </div>
-              {sel.status !== 'active' && <StatusPill status={sel.status === 'vacancy' ? 'Vacancy — open position' : 'Inactive'} />}
-              <div className="flex flex-col gap-2">
-                <h3 className="text-xs font-medium text-muted-foreground">Relationships ({selRels.length})</h3>
-                <ul className="flex flex-col gap-1.5">
-                  {selRels.slice(0, 12).map((r) => {
-                    const outgoing = r.from === sel.id
-                    const other = people.find((p) => p.id === (outgoing ? r.to : r.from))
-                    return (
-                      <li key={r.id} className="flex flex-col gap-0.5 rounded-md border border-border px-2.5 py-2">
-                        <div className="flex items-center gap-2">
-                          <svg width="18" height="6" aria-hidden>
-                            <line x1="0" y1="3" x2="18" y2="3" stroke={relStyle[r.type].stroke} strokeWidth="2" strokeDasharray={relStyle[r.type].dash} />
-                          </svg>
-                          <span className="text-xs font-medium text-foreground">
-                            {outgoing ? `${relLabel[r.type]}:` : relLabel[r.type] === 'Direct manager' ? 'Manages' : `${relLabel[r.type]} for`}
-                          </span>
-                          {r.primary && outgoing && <span className="rounded-sm bg-muted px-1 text-[10px] text-muted-foreground">Primary</span>}
-                        </div>
-                        <button type="button" className="text-left text-sm text-foreground hover:underline" onClick={() => other && focusPerson(other.id)}>
-                          {other?.fullName}
-                        </button>
-                        {r.context && <span className="text-xs text-muted-foreground">{r.context}</span>}
-                      </li>
-                    )
-                  })}
-                  {selRels.length > 12 && <li className="text-xs text-muted-foreground">+{selRels.length - 12} more in list view</li>}
-                </ul>
-              </div>
-              <div className="mt-auto flex flex-col gap-2">
-                {canEditRelationships ? (
-                  <Button variant="outline" size="sm" onClick={() => toast('Relationship editor', { description: 'Add or change typed relationships. Changes are versioned and do not move cards.' })}>
-                    Edit relationships
-                  </Button>
-                ) : (
-                  <p className="text-xs leading-relaxed text-muted-foreground">You can rearrange cards for your own layout. Relationship changes require org-edit permission.</p>
-                )}
-                {sel.status !== 'vacancy' && !sel.id.startsWith('gen_') && (
-                  <Link href={`/employees/${sel.id}`} className="text-center text-sm font-medium text-info hover:underline">
-                    Open full profile
-                  </Link>
-                )}
-              </div>
-            </>
+            <SelectedPanel key={sel.id} p={sel} canEdit={canEdit} onFocus={setSelId} />
           ) : (
-            <p className="text-sm text-muted-foreground">Select a card to see typed relationships. Moving a card never changes who reports to whom.</p>
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              Select a position to edit its title, who holds it and which position it reports to. With nothing selected, Add position creates a role reporting to the owner. Select a position to add a role under it or alongside it (same manager).
+              {!canEdit && ' Your arrangement is temporary; only administrators save the company layout.'}
+            </p>
           )}
         </aside>
+        )}
       </div>
     </div>
+  )
+}
+
+function positionOptions(c: CompanyData, p: Employee) {
+  const below = descendants(c, p.id)
+  return placed(c)
+    .filter((x) => x.id !== p.id && !below.has(x.id))
+    .map((x) => ({ value: x.id, label: positionLabel(x) }))
+}
+
+function SelectedPanel({ p, canEdit, onFocus }: { p: Employee; canEdit: boolean; onFocus: (id: string | null) => void }) {
+  const { company: c, mutate } = useHub()
+  const rels = c.relationships.filter((r) => r.from === p.id || r.to === p.id)
+  const mgr = directManager(c, p.id) ?? ''
+  const vac = p.status === 'vacancy'
+  const [title, setTitle] = useState(p.designation)
+  const [name, setName] = useState(vac ? '' : p.fullName)
+  const [confirmRemove, setConfirmRemove] = useState(false)
+  const editableName = vac || (!p.email && p.accessRole !== 'owner')
+  const candidates = c.employees.filter((e) => e.id !== p.id && (e.status === 'active' || e.status === 'invited'))
+
+  const update = (fn: (e: Employee) => void, action: string, detail = '') =>
+    mutate((co, { audit }) => {
+      const e = co.employees.find((x) => x.id === p.id)
+      if (e) fn(e)
+      audit(action, p.id, detail)
+    })
+
+  const saveName = () => {
+    const n = name.trim()
+    if (!n || n === p.fullName) return
+    update(
+      (e) => {
+        e.fullName = n
+        if (e.status === 'vacancy') e.status = 'active'
+      },
+      'Named position holder',
+      n,
+    )
+    toast.success(`${n} now holds ${p.designation}`, { description: 'Add their email later from Employees to send an invitation.' })
+  }
+
+  return (
+    <>
+      <div className="flex flex-col gap-0.5">
+        <h2 className="text-base font-semibold text-foreground">{p.designation}</h2>
+        <p className="text-sm text-muted-foreground">{vac ? 'Open position' : p.fullName}</p>
+      </div>
+
+      {canEdit && (
+        <div className="flex flex-col gap-3">
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium">Position title</span>
+            <TextInput value={title} onChange={(e) => setTitle(e.target.value)} onBlur={() => title.trim() && title.trim() !== p.designation && update((e) => void (e.designation = title.trim()), 'Renamed position', title.trim())} />
+          </label>
+
+          {editableName && (
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium">Person in this position (optional)</span>
+              <div className="flex gap-2">
+                <TextInput placeholder="Type a name" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), saveName())} />
+                <Button type="button" variant="outline" size="sm" className="h-9" disabled={!name.trim() || name.trim() === p.fullName} onClick={saveName}>
+                  Save
+                </Button>
+              </div>
+            </label>
+          )}
+
+          {vac && candidates.length > 0 && (
+            <label className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium">Or assign an existing employee</span>
+              <Select
+                placeholder="Choose employee"
+                value=""
+                options={candidates.map((e) => ({ value: e.id, label: `${e.fullName} — ${e.designation}` }))}
+                onChange={(e) => {
+                  const pid = e.target.value
+                  if (!pid) return
+                  const who = c.employees.find((x) => x.id === pid)
+                  mutate((co, { audit }) => {
+                    assignToPosition(co, pid, p.id)
+                    audit('Assigned to position', pid, p.designation)
+                  })
+                  toast.success(`${who?.fullName} moved into ${p.designation}`)
+                  onFocus(pid)
+                }}
+              />
+            </label>
+          )}
+
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium">Department</span>
+            <Select
+              options={c.departments.map((d) => ({ value: d.id, label: d.name }))}
+              value={p.dept}
+              onChange={(e) => update((emp) => void (emp.dept = e.target.value), 'Moved department', c.departments.find((d) => d.id === e.target.value)?.name)}
+            />
+          </label>
+
+          <label className="flex flex-col gap-1.5">
+            <span className="text-xs font-medium">Reports to (position)</span>
+            <Select
+              options={positionOptions(c, p)}
+              value={mgr}
+              placeholder="Top of the organization"
+              onChange={(e) => {
+                const to = e.target.value
+                mutate((co, { audit }) => {
+                  setDirectManager(co, p.id, to)
+                  audit('Changed reporting line', p.id, to ? `Reports to ${co.employees.find((x) => x.id === to)?.designation}` : 'Top level')
+                })
+                toast.success('Reporting line updated', { description: 'Use Auto-arrange to redraw the chart.' })
+              }}
+            />
+            <span className="text-xs leading-relaxed text-muted-foreground">Reporting follows the position, so it stays in place when the person changes.</span>
+          </label>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-2">
+        <h3 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Relationships</h3>
+        <ul className="flex flex-col gap-1.5">
+          {rels.length === 0 && <li className="text-sm text-muted-foreground">No relationships yet.</li>}
+          {rels.slice(0, 14).map((r) => {
+            const out = r.from === p.id
+            const other = c.employees.find((e) => e.id === (out ? r.to : r.from))
+            return (
+              <li key={r.id} className="flex flex-col gap-0.5 rounded-md border border-border px-2.5 py-2">
+                <span className="flex items-center gap-2 text-xs font-medium text-foreground">
+                  <svg width="18" height="6" aria-hidden>
+                    <line x1="0" y1="3" x2="18" y2="3" stroke={relStyle[r.type].stroke} strokeWidth="2" strokeDasharray={relStyle[r.type].dash} />
+                  </svg>
+                  {out ? relLabel[r.type] : r.type === 'direct' ? 'Manages' : `${relLabel[r.type]} for`}
+                </span>
+                <button type="button" className="text-left text-sm text-foreground hover:underline" onClick={() => other && onFocus(other.id)}>
+                  {other ? positionLabel(other) : '—'}
+                </button>
+                {r.context && <span className="text-xs text-muted-foreground">{r.context}</span>}
+              </li>
+            )
+          })}
+        </ul>
+      </div>
+
+      <div className="mt-auto flex flex-col gap-2">
+        {vac && canEdit && (
+          <Link href={`/employees?invite=1&position=${p.id}`} className="text-center text-sm font-medium text-info hover:underline">
+            Invite someone by email into this position
+          </Link>
+        )}
+        {!vac && p.email && (
+          <Link href={`/employees/${p.id}`} className="text-center text-sm font-medium text-info hover:underline">
+            Open full profile
+          </Link>
+        )}
+        {canEdit && isRemovable(p) && (
+          <Button
+            type="button"
+            variant={confirmRemove ? 'destructive' : 'outline'}
+            onClick={() => {
+              if (!confirmRemove) return setConfirmRemove(true)
+              mutate((co, { audit }) => {
+                removePosition(co, p.id)
+                audit('Removed position', p.id, p.designation)
+              })
+              toast.success(`${p.designation} removed`, { description: 'Anyone reporting to it now reports one level up.' })
+              onFocus(null)
+            }}
+          >
+            <Trash2 /> {confirmRemove ? 'Click again to remove' : 'Remove position'}
+          </Button>
+        )}
+      </div>
+    </>
   )
 }

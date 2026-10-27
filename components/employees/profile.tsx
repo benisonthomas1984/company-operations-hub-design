@@ -1,189 +1,511 @@
 'use client'
 
 import Link from 'next/link'
-import { Check, Lock, Mail, Sparkles } from 'lucide-react'
+import { useState } from 'react'
+import { Lock, Pencil, Plus, X } from 'lucide-react'
 import { toast } from 'sonner'
+import { accessRoleLabel, fmtEUR, goalStatuses, PERIOD, relLabel, TODAY, type GoalStatus } from '@/lib/fixtures'
+import { EmployeeFormSheet } from '@/components/employees/add-employee'
+import { ProductivityEvidence } from '@/components/personal/productivity'
+import { useHub } from '@/lib/store'
+import { directReports, empOf, personAllocation, productivity } from '@/lib/derive'
 import { Button } from '@/components/ui/button'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { empById, projects, relationships, relLabel } from '@/lib/fixtures'
-import { useStore } from '@/lib/store'
-import { Avatar, Callout, DeptTag, IdChip, KV, Panel, SimLabel, StatusPill } from '@/components/hub/primitives'
+import { Avatar, Callout, DeptTag, KV, Panel, PersonLink, StatusPill } from '@/components/hub/primitives'
+import { Page, StateBlock } from '@/components/hub/page'
 import { ActivityTable } from '@/components/activities/activity-table'
+import { Field, Select, TabBar, TextInput, useParam } from '@/components/hub/form'
 
-const comparison: Record<string, { duty: string; evidence: string | null; state: 'matched' | 'no-evidence' | 'unassigned' }[]> = {
-  ana: [
-    { duty: 'Integrations development', evidence: 'ACT-1042 Connect accounting API', state: 'matched' },
-    { duty: 'API reliability', evidence: 'ACT-1019 Retry logic for ledger webhook', state: 'matched' },
-    { duty: 'Code review', evidence: null, state: 'no-evidence' },
-    { duty: 'Technical documentation (not assigned)', evidence: 'ACT-1008 Document API rate limits', state: 'unassigned' },
-  ],
+const goalTone: Record<GoalStatus, string> = {
+  'On track': 'bg-info',
+  'At risk': 'bg-warning',
+  Achieved: 'bg-success',
+  Missed: 'bg-destructive',
 }
 
 export function EmployeeProfile({ id }: { id: string }) {
-  const { perspective, can } = useStore()
-  const e = empById(id)
-  if (!e || e.status === 'vacancy') {
-    return <Callout tone="danger" title="Profile not available">This person doesn&apos;t exist in Comet Works or you don&apos;t have access.</Callout>
-  }
-  const isSelf = perspective.id === id
-  const canPersonal = isSelf || can('personal.restricted')
-  const rels = relationships.filter((r) => r.from === id)
-  const reports = relationships.filter((r) => r.to === id && r.type === 'direct')
-  const myProjects = projects.filter((p) => p.memberIds.includes(id) || p.pmId === id)
-  const cmp = comparison[id]
+  const { company: c, me, can } = useHub()
+  const e = empOf(c, id)
+  const [tab, setTab] = useParam('tab', 'overview')
+  const [editing, setEditing] = useState(false)
+
+  if (!e || e.status === 'vacancy')
+    return (
+      <Page title="Employee not found" crumbs={[{ label: 'Employees', href: '/employees' }]}>
+        <StateBlock title="Not found" body={`This person isn't in ${c.name}.`} />
+      </Page>
+    )
+
+  const isSelf = me.id === e.id
+  const isManagerOf = c.relationships.some((r) => r.from === e.id && r.to === me.id)
+  const canAssign = isManagerOf || can('org.edit')
+  const canSeePay = isSelf || isManagerOf || can('org.edit')
+  const alloc = personAllocation(c, e.id)
+  const goals = e.goals ?? []
+  const canEditProfile = can('org.edit')
+  const canSeeProductivity = isSelf || isManagerOf || can('manage')
+  const prod = productivity(c, e.id)
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-4 rounded-lg border border-border bg-card p-5 md:flex-row md:items-center">
-        <Avatar id={id} size="lg" />
-        <div className="flex flex-1 flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-lg font-semibold text-foreground">{e.fullName}</h2>
-            {e.status === 'inactive' && <StatusPill status="Inactive" />}
-            {isSelf && <span className="rounded-sm bg-muted px-1.5 text-xs text-muted-foreground">You</span>}
-          </div>
-          <p className="text-sm text-muted-foreground">{e.designation}</p>
-          <div className="flex flex-wrap items-center gap-3">
-            <DeptTag id={e.dept} />
-            <span className="font-mono text-xs text-muted-foreground">{e.email}</span>
-            <span className="text-xs text-muted-foreground">{e.location}</span>
-          </div>
+    <Page
+      title={
+        <span className="flex items-center gap-3">
+          <Avatar id={e.id} size="lg" />
+          <span className="flex flex-col">
+            {e.fullName}
+            <span className="text-sm font-normal text-muted-foreground">{e.designation}</span>
+          </span>
+        </span>
+      }
+      crumbs={[{ label: 'Employees', href: '/employees' }]}
+      actions={
+        canEditProfile && (
+          <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+            <Pencil aria-hidden /> Edit profile
+          </Button>
+        )
+      }
+    >
+      {canEditProfile && <EmployeeFormSheet key={editing ? 'open' : 'closed'} open={editing} onOpenChange={setEditing} employeeId={e.id} />}
+      <div className="grid gap-4 xl:grid-cols-[1fr_320px]">
+        <div className="flex min-w-0 flex-col gap-4">
+          <TabBar
+            label="Employee sections"
+            value={tab}
+            onChange={setTab}
+            tabs={[
+              { id: 'overview', label: 'Overview' },
+              { id: 'review', label: 'Performance review', count: goals.length },
+              ...(canSeeProductivity ? [{ id: 'productivity', label: 'Productivity', count: prod.commitments.length }] : []),
+              ...(canSeePay ? [{ id: 'value', label: 'Time & cost', count: alloc.rows.filter((r) => !r.former).length }] : []),
+              { id: 'activities', label: 'Activities' },
+            ]}
+          />
+          {tab === 'overview' && <Overview id={e.id} canAssign={canAssign} />}
+          {tab === 'productivity' && canSeeProductivity && (
+            <>
+              <Panel title={`Delivery in ${PERIOD.label}`} description={`The current review period is the calendar month of ${PERIOD.label}. A "commitment" is any activity owned by ${e.fullName} with a due date in that month that was not cancelled. Click a box to see the activities behind the number.`}>
+                <p className="text-sm leading-relaxed text-foreground">
+                  <span className="font-mono">{prod.accepted.length}</span> of <span className="font-mono">{prod.commitments.length}</span> commitments accepted so far —{' '}
+                  <span className="font-mono">{prod.onTime.length}</span> on time, <span className="font-mono">{prod.late.length}</span> late, <span className="font-mono">{prod.submitted.length}</span> waiting for review.
+                </p>
+              </Panel>
+              <ProductivityEvidence personId={e.id} self={isSelf} />
+            </>
+          )}
+          {tab === 'review' && <Review id={e.id} canEdit={canAssign} canSee={canSeePay || can('manage')} />}
+          {tab === 'value' && canSeePay && <TimeValue id={e.id} />}
+          {tab === 'activities' && (
+            <Panel title="Activities">
+              <ActivityTable filter={(a) => a.ownerId === e.id} caption={`Activities owned by ${e.fullName}`} empty="No activities you can see for this person." />
+            </Panel>
+          )}
         </div>
-        {isSelf && (
-          <Link href="/productivity" className="text-sm font-medium text-info hover:underline">
-            My productivity evidence
-          </Link>
-        )}
+        <Sidebar id={e.id} canSeePay={canSeePay} />
       </div>
+    </Page>
+  )
+}
 
-      <Tabs defaultValue="overview" className="flex flex-col gap-3">
-        <TabsList className="flex-wrap">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="responsibilities">Responsibilities</TabsTrigger>
-          <TabsTrigger value="activities">Activities</TabsTrigger>
-          <TabsTrigger value="projects">Projects ({myProjects.length})</TabsTrigger>
-          {isSelf && <TabsTrigger value="mail">My Mail</TabsTrigger>}
-        </TabsList>
+function Overview({ id, canAssign }: { id: string; canAssign: boolean }) {
+  const { company: c, mutate } = useHub()
+  const e = empOf(c, id)!
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState('')
+  const resp = c.responsibilities.filter((r) => r.employeeId === id && r.status === 'Active')
+  const alloc = personAllocation(c, id)
 
-        <TabsContent value="overview" className="grid gap-4 lg:grid-cols-2">
-          <Panel title="Work profile">
-            <dl className="grid grid-cols-2 gap-4 p-4">
-              <KV label="Joined">{e.joined}</KV>
-              <KV label="Location">{e.location}</KV>
-              <KV label="Department">
-                <DeptTag id={e.dept} />
-              </KV>
-              <KV label="Direct reports">{reports.length}</KV>
-            </dl>
-          </Panel>
-          <Panel title="Restricted personal information" description="Visible only to the employee and explicitly authorized HR/admin roles.">
-            {canPersonal ? (
-              <dl className="grid grid-cols-2 gap-4 p-4">
-                <KV label="Personal phone">+351 9•• ••• 214</KV>
-                <KV label="Emergency contact">On file · 1 contact</KV>
-                <KV label="Date of birth">On file</KV>
-                <KV label="Tax ID">PT ••••••481</KV>
-              </dl>
-            ) : (
-              <p className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
-                <Lock aria-hidden className="size-4" /> Restricted fields are not shown for your role.
-              </p>
-            )}
-          </Panel>
-          <Panel title="Relationships" className="lg:col-span-2">
-            <ul className="divide-y divide-border">
-              {rels.map((r) => (
-                <li key={r.id} className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-sm">
-                  <span className="w-40 text-muted-foreground">{relLabel[r.type]}</span>
-                  <Link href={`/employees/${r.to}`} className="font-medium text-foreground hover:underline">
-                    {empById(r.to)?.fullName}
-                  </Link>
-                  {r.primary && <span className="rounded-sm bg-muted px-1 text-[10px] text-muted-foreground">Primary</span>}
-                  {r.context && <span className="text-xs text-muted-foreground">{r.context}</span>}
-                </li>
-              ))}
-              {rels.length === 0 && <li className="px-4 py-3 text-sm text-muted-foreground">Top of structure — no manager.</li>}
-            </ul>
-          </Panel>
-        </TabsContent>
+  const addResp = (ev: React.FormEvent) => {
+    ev.preventDefault()
+    const text = draft.trim()
+    if (!text) return
+    mutate((c2, ctx) => {
+      const rid = ctx.id('RSP')
+      c2.responsibilities.push({ id: rid, employeeId: id, title: text, description: text, scope: '', assignerId: ctx.me.id, effective: TODAY, approvalRequired: false, status: 'Active', versions: [{ v: 1, text, at: ctx.now, by: ctx.me.id, note: 'Assigned' }] })
+      ctx.audit('responsibility.assign', rid, `${text} → ${e.fullName}`)
+    })
+    toast.success('Responsibility added')
+    setDraft('')
+  }
 
-        <TabsContent value="responsibilities" className="grid gap-4 lg:grid-cols-2">
-          <Panel title="Assigned responsibilities" description="Set by managers or HR. Versioned.">
-            <ul className="divide-y divide-border">
-              {e.responsibilities.map((r) => (
-                <li key={r} className="px-4 py-2.5 text-sm text-foreground">
-                  {r}
-                </li>
-              ))}
-            </ul>
-          </Panel>
-          <Panel
-            title="Assigned vs observed work"
-            description="AI suggestion from accepted activities this quarter. Not a performance judgement."
-            action={<SimLabel>AI draft</SimLabel>}
-          >
-            {cmp ? (
-              <div className="flex flex-col">
-                <ul className="divide-y divide-border">
-                  {cmp.map((c) => (
-                    <li key={c.duty} className="flex flex-col gap-1 px-4 py-2.5">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm text-foreground">{c.duty}</span>
-                        <StatusPill status={c.state === 'matched' ? 'Evidence found' : c.state === 'no-evidence' ? 'No evidence in period' : 'Observed, not assigned'} tone={c.state === 'matched' ? 'success' : c.state === 'no-evidence' ? 'muted' : 'info'} />
-                      </div>
-                      {c.evidence && <span className="text-xs text-muted-foreground">{c.evidence}</span>}
-                    </li>
-                  ))}
-                </ul>
-                <div className="flex flex-wrap items-center gap-2 border-t border-border p-3">
-                  <Sparkles aria-hidden className="size-4 text-muted-foreground" />
-                  <span className="text-xs text-muted-foreground">Suggestion · confidence medium · 4 sources</span>
-                  <Button size="sm" variant="outline" className="ml-auto" onClick={() => toast.success('Suggestion confirmed', { description: 'Saved to responsibility history with reviewer and time.' })}>
-                    <Check /> Confirm
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <p className="p-4 text-sm text-muted-foreground">Not enough accepted activity evidence to compare yet.</p>
-            )}
-          </Panel>
-        </TabsContent>
+  const removeResp = (rid: string) => {
+    mutate((c2, ctx) => {
+      const r = c2.responsibilities.find((x) => x.id === rid)
+      if (!r) return
+      r.status = 'Removed'
+      ctx.audit('responsibility.remove', rid, `${r.title} — ${e.fullName}`)
+    })
+    toast.success('Responsibility removed')
+  }
 
-        <TabsContent value="activities">
-          <Panel title="Activities" description="Same canonical records shown in projects, departments and the dossier.">
-            <ActivityTable filter={(a) => a.ownerId === id} caption={`Activities owned by ${e.fullName}`} />
-          </Panel>
-        </TabsContent>
-
-        <TabsContent value="projects">
-          <Panel title="Projects">
-            <ul className="divide-y divide-border">
-              {myProjects.map((p) => (
-                <li key={p.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">
-                  <IdChip href={`/projects/${p.id}`}>{p.id}</IdChip>
-                  <Link className="font-medium text-foreground hover:underline" href={`/projects/${p.id}`}>
-                    {p.name}
-                  </Link>
-                  <span className="text-xs text-muted-foreground">{p.pmId === id ? 'Project manager' : 'Member'}</span>
-                  <StatusPill status={p.health} className="ml-auto" />
-                </li>
-              ))}
-              {myProjects.length === 0 && <li className="px-4 py-3 text-sm text-muted-foreground">Not on any project.</li>}
-            </ul>
-          </Panel>
-        </TabsContent>
-
-        {isSelf && (
-          <TabsContent value="mail">
-            <Callout tone="info" title="Your mailbox stays private" icon={<Mail className="size-4" />}>
-              Only you can open your connected mailbox. Administrators, managers, finance and AI on behalf of others cannot.{' '}
-              <Link href="/mail" className="font-medium underline">
-                Open My Mail
-              </Link>
-            </Callout>
-          </TabsContent>
+  return (
+    <>
+      <Panel
+        title="Responsibilities"
+        description="Ongoing accountabilities, separate from time-bound activities."
+        action={
+          canAssign &&
+          !adding && (
+            <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+              <Plus aria-hidden /> Add
+            </Button>
+          )
+        }
+      >
+        {resp.length ? (
+          <ul className="flex flex-col">
+            {resp.map((r) => (
+              <li key={r.id} className="group flex items-start gap-3 rounded-md px-1 py-1.5 hover:bg-muted/60">
+                <span aria-hidden className="mt-2 size-1.5 shrink-0 rounded-full bg-primary" />
+                <span className="flex-1 text-sm leading-relaxed text-foreground" title={`Since ${r.effective} · assigned by ${empOf(c, r.assignerId)?.fullName ?? 'Unknown'}`}>
+                  {r.title}
+                </span>
+                {canAssign && (
+                  <button type="button" onClick={() => removeResp(r.id)} className="rounded p-1 text-muted-foreground opacity-0 hover:bg-background hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100" aria-label={`Remove responsibility: ${r.title}`}>
+                    <X className="size-3.5" aria-hidden />
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          !adding && <p className="text-sm text-muted-foreground">No responsibilities yet.</p>
         )}
-      </Tabs>
+        {adding && (
+          <form onSubmit={addResp} className="mt-2 flex items-center gap-2">
+            <TextInput autoFocus value={draft} onChange={(ev) => setDraft(ev.target.value)} onKeyDown={(ev) => ev.key === 'Escape' && setAdding(false)} placeholder="e.g. Review integration pull requests within two days" aria-label="New responsibility" className="flex-1" />
+            <Button type="submit" size="sm" disabled={!draft.trim()}>Add</Button>
+            <Button type="button" size="sm" variant="ghost" onClick={() => { setAdding(false); setDraft('') }}>Done</Button>
+          </form>
+        )}
+      </Panel>
+
+      <Panel title="Projects" description="Role, share of working time and delivery record on each project.">
+        {alloc.rows.length ? (
+          <ul className="flex flex-col divide-y divide-border">
+            {alloc.rows.map((r) => (
+              <li key={r.project.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-2.5 text-sm">
+                <span className="flex min-w-0 flex-col">
+                  <Link href={`/projects/${r.project.id}`} className="font-medium text-info hover:underline">{r.project.name}</Link>
+                  <span className="text-xs text-muted-foreground">{r.role}{r.former ? ' · former member' : ''}</span>
+                </span>
+                <span className="flex items-center gap-4 text-xs text-muted-foreground">
+                  <span><span className="font-mono text-foreground">{r.allocation}%</span> time</span>
+                  <span><span className="font-mono text-foreground">{r.accepted.length}/{r.acts.length}</span> accepted</span>
+                  {r.overdue.length > 0 && <span className="text-destructive">{r.overdue.length} overdue</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-muted-foreground">Not on any project.</p>
+        )}
+      </Panel>
+    </>
+  )
+}
+
+function Review({ id, canEdit, canSee }: { id: string; canEdit: boolean; canSee: boolean }) {
+  const { company: c, mutate } = useHub()
+  const e = empOf(c, id)!
+  const prod = productivity(c, id)
+  const alloc = personAllocation(c, id)
+  const goals = e.goals ?? []
+  const [adding, setAdding] = useState(false)
+  const [form, setForm] = useState({ title: '', measure: '', due: '' })
+
+  if (!canSee)
+    return (
+      <Callout tone="muted" title="Restricted" icon={<Lock className="size-4" />}>
+        Performance reviews are visible to this person, their manager and HR.
+      </Callout>
+    )
+
+  const addGoal = (ev: React.FormEvent) => {
+    ev.preventDefault()
+    if (!form.title.trim() || !form.due) return
+    mutate((c2, ctx) => {
+      const emp = c2.employees.find((x) => x.id === id)
+      if (!emp) return
+      const gid = ctx.id('GOL')
+      emp.goals = [...(emp.goals ?? []), { id: gid, title: form.title.trim(), measure: form.measure.trim(), due: form.due, status: 'On track', setBy: ctx.me.id, setAt: TODAY }]
+      ctx.audit('goal.set', gid, `${form.title.trim()} → ${emp.fullName}`)
+    })
+    toast.success('Goal added')
+    setForm({ title: '', measure: '', due: '' })
+    setAdding(false)
+  }
+
+  const setStatus = (gid: string, status: GoalStatus) =>
+    mutate((c2, ctx) => {
+      const goal = c2.employees.find((x) => x.id === id)?.goals?.find((x) => x.id === gid)
+      if (!goal) return
+      goal.status = status
+      ctx.audit('goal.status', gid, `${goal.title} → ${status}`)
+    })
+
+  const achieved = goals.filter((g) => g.status === 'Achieved').length
+  const rate = (n: number, d: number) => (d ? `${Math.round((n / d) * 100)}%` : '—')
+
+  return (
+    <>
+      <Panel title="Review summary" description="Evidence from goals, accepted work and project contribution. Each measure stands on its own.">
+        <dl className="grid grid-cols-2 gap-4 md:grid-cols-4">
+          <Measure label="Goals achieved" value={`${achieved}/${goals.length}`} />
+          <Measure label="Commitments accepted" value={`${prod.accepted.length}/${prod.commitments.length}`} />
+          <Measure label="On-time delivery" value={rate(prod.onTime.length, prod.accepted.length)} />
+          <Measure label="First-pass acceptance" value={rate(prod.firstPass.length, prod.accepted.length)} />
+        </dl>
+      </Panel>
+
+      <Panel
+        title="Goals"
+        description="Agreed with the manager. Updated through the review period."
+        action={canEdit && !adding && (
+          <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
+            <Plus aria-hidden /> Add goal
+          </Button>
+        )}
+      >
+        {goals.length ? (
+          <ul className="flex flex-col divide-y divide-border">
+            {goals.map((g) => (
+              <li key={g.id} className="flex flex-wrap items-start justify-between gap-3 py-3">
+                <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                  <span className="text-sm font-medium text-foreground">{g.title}</span>
+                  {g.measure && <span className="text-sm leading-relaxed text-muted-foreground">{g.measure}</span>}
+                  <span className="text-xs text-muted-foreground">Due {g.due} · set by {empOf(c, g.setBy)?.fullName ?? 'Unknown'}{g.note ? ` · ${g.note}` : ''}</span>
+                </span>
+                {canEdit ? (
+                  <Select aria-label={`Status of ${g.title}`} value={g.status} onChange={(ev) => setStatus(g.id, ev.target.value as GoalStatus)} options={goalStatuses.map((s) => ({ value: s, label: s }))} className="w-32" />
+                ) : (
+                  <span className="flex items-center gap-1.5 text-xs text-foreground">
+                    <span aria-hidden className={`size-2 rounded-full ${goalTone[g.status]}`} />
+                    {g.status}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          !adding && <p className="text-sm text-muted-foreground">No goals set for this review period.</p>
+        )}
+        {adding && (
+          <form onSubmit={addGoal} className="mt-3 grid gap-3 md:grid-cols-[1fr_1fr_160px]">
+            <Field label="Goal" required>
+              <TextInput autoFocus value={form.title} onChange={(ev) => setForm({ ...form, title: ev.target.value })} placeholder="e.g. Ship the billing connector" />
+            </Field>
+            <Field label="How it is measured">
+              <TextInput value={form.measure} onChange={(ev) => setForm({ ...form, measure: ev.target.value })} placeholder="e.g. Accepted with tests green" />
+            </Field>
+            <Field label="Due" required>
+              <TextInput type="date" value={form.due} onChange={(ev) => setForm({ ...form, due: ev.target.value })} />
+            </Field>
+            <div className="flex gap-2 md:col-span-3">
+              <Button type="submit" size="sm" disabled={!form.title.trim() || !form.due}>Save goal</Button>
+              <Button type="button" size="sm" variant="ghost" onClick={() => setAdding(false)}>Cancel</Button>
+            </div>
+          </form>
+        )}
+      </Panel>
+
+      <Panel title="Project contribution" description="What was delivered on each project this person works on.">
+        {alloc.rows.length ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <caption className="sr-only">Project contribution for {e.fullName}</caption>
+              <thead className="text-left text-xs text-muted-foreground">
+                <tr className="border-b border-border">
+                  <th className="py-2 pr-3 font-medium">Project</th>
+                  <th className="py-2 pr-3 font-medium">Activities</th>
+                  <th className="py-2 pr-3 font-medium">Accepted</th>
+                  <th className="py-2 pr-3 font-medium">On time</th>
+                  <th className="py-2 font-medium">Overdue</th>
+                </tr>
+              </thead>
+              <tbody>
+                {alloc.rows.map((r) => (
+                  <tr key={r.project.id} className="border-b border-border last:border-0">
+                    <td className="py-2 pr-3"><Link href={`/projects/${r.project.id}`} className="text-info hover:underline">{r.project.name}</Link></td>
+                    <td className="py-2 pr-3 font-mono">{r.acts.length}</td>
+                    <td className="py-2 pr-3 font-mono">{r.accepted.length}</td>
+                    <td className="py-2 pr-3 font-mono">{r.onTime.length}</td>
+                    <td className={`py-2 font-mono ${r.overdue.length ? 'text-destructive' : ''}`}>{r.overdue.length}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-sm text-muted-foreground">Not on any project.</p>
+        )}
+      </Panel>
+    </>
+  )
+}
+
+function Measure({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="font-mono text-xl text-foreground">{value}</dd>
     </div>
+  )
+}
+
+function TimeValue({ id }: { id: string }) {
+  const { company: c } = useHub()
+  const e = empOf(c, id)!
+  const a = personAllocation(c, id)
+  const active = a.rows.filter((r) => !r.former && r.allocation > 0)
+
+  if (!a.salary)
+    return (
+      <Callout tone="muted" title="No salary recorded">
+        Add a salary for {e.fullName} to see how their cost is distributed across projects.
+      </Callout>
+    )
+
+  return (
+    <>
+      <Panel title="How this salary is charged each month" description="Each project pays for the share of working time this person spends on it. Whatever is left is charged to their department.">
+        <div className="flex flex-col gap-4">
+          <p className="rounded-md bg-muted px-3 py-2 text-sm leading-relaxed text-foreground">
+            {fmtEUR(a.salary)} a year ÷ 12 = <span className="font-mono">{fmtEUR(a.monthly)}</span> a month.
+            {active[0] && (
+              <>
+                {' '}Example: {active[0].allocation}% of the time on {active[0].project.name} → {active[0].allocation}% × {fmtEUR(a.monthly)} = <span className="font-mono">{fmtEUR(active[0].monthlyValue)}</span> charged to that project every month.
+              </>
+            )}
+          </p>
+          <div className="flex h-3 w-full overflow-hidden rounded-full bg-muted" role="img" aria-label={`${a.allocated}% allocated to projects, ${a.unallocated}% unallocated`}>
+            {active.map((r, i) => (
+              <span key={r.project.id} className={i % 2 ? 'bg-primary/60' : 'bg-primary'} style={{ width: `${Math.min(r.allocation, 100)}%` }} title={`${r.project.name} · ${r.allocation}%`} />
+            ))}
+          </div>
+          <ul className="flex flex-col divide-y divide-border text-sm">
+            <li aria-hidden className="flex items-center justify-between gap-3 pb-1 text-xs text-muted-foreground">
+              <span>Charged to</span>
+              <span className="flex items-center gap-4">
+                <span>Time</span>
+                <span className="w-20 text-right">Per month</span>
+              </span>
+            </li>
+            {active.map((r) => (
+              <li key={r.project.id} className="flex items-center justify-between gap-3 py-2">
+                <Link href={`/projects/${r.project.id}?tab=budget`} className="min-w-0 truncate text-info hover:underline">{r.project.name}</Link>
+                <span className="flex items-center gap-4 text-xs text-muted-foreground">
+                  <span className="font-mono">{r.allocation}%</span>
+                  <span className="w-20 text-right font-mono text-foreground">{fmtEUR(r.monthlyValue)}</span>
+                </span>
+              </li>
+            ))}
+            <li className="flex items-center justify-between gap-3 py-2">
+              <span className="text-muted-foreground">Department work (not on a project)</span>
+              <span className="flex items-center gap-4 text-xs text-muted-foreground">
+                <span className="font-mono">{a.unallocated}%</span>
+                <span className={`w-20 text-right font-mono ${a.unallocated > 0 ? 'text-warning' : 'text-foreground'}`}>{fmtEUR(a.unallocatedMonthly)}</span>
+              </span>
+            </li>
+          </ul>
+          {a.overAllocated && (
+            <Callout tone="warning" title={`Over-allocated: ${a.allocated}%`}>
+              Project allocations add up to more than 100% of working time. Lower an allocation on one of the projects.
+            </Callout>
+          )}
+          {!a.overAllocated && a.unallocated > 0 && (
+            <p className="text-sm leading-relaxed text-muted-foreground">
+              {fmtEUR(a.unallocatedMonthly)} a month is not attributed to any project. It counts as department operating cost: responsibilities, department activities and support work.
+            </p>
+          )}
+        </div>
+      </Panel>
+
+      <Panel title="Cost charged to projects so far" description="Annual salary ÷ 365 × days on the project × allocation %. The same figure appears in each project's Budget & cost tab.">
+        <ul className="flex flex-col divide-y divide-border text-sm">
+          {a.rows.map((r) => (
+            <li key={r.project.id} className="flex items-center justify-between gap-3 py-2">
+              <span className="flex min-w-0 flex-col">
+                <span className="truncate text-foreground">{r.project.name}</span>
+                <span className="text-xs text-muted-foreground">{r.project.start} → {r.project.target}{r.former ? ' · left project' : ''}</span>
+              </span>
+              <span className="font-mono text-foreground">{fmtEUR(r.costToDate)}</span>
+            </li>
+          ))}
+        </ul>
+      </Panel>
+    </>
+  )
+}
+
+function Sidebar({ id, canSeePay }: { id: string; canSeePay: boolean }) {
+  const { company: c, me, can } = useHub()
+  const e = empOf(c, id)!
+  const isSelf = me.id === id
+  const isManagerOf = c.relationships.some((r) => r.from === id && r.to === me.id)
+  const seePersonal = isSelf || can('org.edit')
+  const outgoing = c.relationships.filter((r) => r.from === id)
+  const reports = directReports(c, id)
+  const prod = productivity(c, id)
+  const alloc = personAllocation(c, id)
+
+  return (
+    <aside className="flex flex-col gap-4">
+      <Panel title="Work profile">
+        <div className="flex flex-col gap-3">
+          <KV label="Status"><StatusPill status={e.status} /></KV>
+          <KV label="Department"><DeptTag id={e.dept} /></KV>
+          <KV label="Email"><a href={`mailto:${e.email}`} className="text-info hover:underline">{e.email}</a></KV>
+          <KV label="Location">{e.location}</KV>
+          <KV label="Joined">{e.joined}</KV>
+          <KV label="Access">{accessRoleLabel[e.accessRole]}</KV>
+        </div>
+      </Panel>
+      <Panel title="Compensation">
+        {canSeePay ? (
+          <div className="flex flex-col gap-3">
+            <KV label="Annual salary"><span className="font-mono">{e.salary ? fmtEUR(e.salary) : 'Not recorded'}</span></KV>
+            <KV label="Monthly"><span className="font-mono">{e.salary ? fmtEUR(alloc.monthly) : '—'}</span></KV>
+            <KV label="Allocated to projects"><span className={`font-mono ${alloc.overAllocated ? 'text-destructive' : ''}`}>{alloc.allocated}%</span></KV>
+          </div>
+        ) : (
+          <Callout tone="muted" title="Restricted" icon={<Lock className="size-4" />}>
+            Visible to this person, their manager and HR.
+          </Callout>
+        )}
+      </Panel>
+      <Panel title="Reporting lines">
+        <div className="flex flex-col gap-3">
+          {outgoing.length ? (
+            outgoing.map((r) => (
+              <KV key={r.id} label={relLabel[r.type]}>
+                <PersonLink id={r.to} showRole />
+              </KV>
+            ))
+          ) : (
+            <p className="text-sm text-muted-foreground">Top of the organization.</p>
+          )}
+          {reports.length > 0 && (
+            <KV label={`Direct reports · ${reports.length}`}>
+              <span className="flex flex-col gap-1">
+                {reports.map((r) => <PersonLink key={r} id={r} />)}
+              </span>
+            </KV>
+          )}
+        </div>
+      </Panel>
+      <Panel title="Personal details">
+        {seePersonal ? (
+          <div className="flex flex-col gap-3">
+            <KV label="Phone">{e.phone ?? '—'}</KV>
+            <KV label="Date of birth">{e.dob ?? '—'}</KV>
+            <KV label="Emergency contact">{e.emergency ?? '—'}</KV>
+          </div>
+        ) : (
+          <Callout tone="muted" title="Restricted" icon={<Lock className="size-4" />}>
+            Visible only to this person and HR.
+          </Callout>
+        )}
+      </Panel>
+    </aside>
   )
 }
